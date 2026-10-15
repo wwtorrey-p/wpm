@@ -1,0 +1,9 @@
+.pio/
+sdkconfig.esp32s3
+managed_components/
+dependencies.lock
+src/secrets.h
+web/node_modules/
+data/
+build.log
+/ref/

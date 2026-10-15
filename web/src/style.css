@@ -1,0 +1,24 @@
+:root { font-family: system-ui, sans-serif; color-scheme: light dark; }
+body { margin: 0; }
+main { max-width: 720px; margin: 0 auto; padding: 1rem; }
+.card { border: 1px solid #8884; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+.card h2 { margin-top: 0; font-size: 1.1rem; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; }
+dt { opacity: .7; }
+dd { margin: 0; }
+label { display: block; margin-bottom: .5rem; }
+input { display: block; padding: .3rem; width: 12rem; }
+button { padding: .4rem .8rem; margin-right: .5rem; }
+.buttons { margin-top: 1rem; }
+.warn { background: #f5a62340; padding: .5rem; border-radius: 4px; }
+.state { text-transform: uppercase; }
+.state.armed { color: #2a9d4a; }
+.state.backoff { color: #d9822b; }
+.state.disabled { color: #888; }
+.chart { width: 100%; }
+.chart rect { fill: #3b82f6; }
+.chart .target { stroke: #d9822b; stroke-dasharray: 4; }
+.chart text { font-size: 10px; fill: currentColor; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: .2rem .4rem; border-bottom: 1px solid #8882; font-size: .9rem; }
+tr.fault td { color: #d33; }
