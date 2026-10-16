@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import preact from '@preact/preset-vite';
+import { mockApi } from './mock-api.js';
 
 // Build output feeds the SPIFFS image (`pio run -t uploadfs`).
 export default defineConfig({
-  plugins: [preact()],
+  plugins: [preact(), ...(process.env.DEVICE_URL ? [] : [mockApi()])],
   build: {
     outDir: '../data',
     emptyOutDir: true,

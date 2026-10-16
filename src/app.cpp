@@ -92,6 +92,11 @@ void App::applySettings(const pump::Settings& s) {
     savePersisted();
 }
 
+void App::clearLog() {
+    log_ = EventLog{};
+    storage::save("events", log_);
+}
+
 bool App::checkPassword(const std::string& user, const std::string& pass) const {
     uint8_t h[32];
     hashPassword(cred_.salt, pass, h);

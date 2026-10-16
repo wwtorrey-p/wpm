@@ -41,6 +41,7 @@ void Controller::enterSettling() {
     auxClosed_ = true;
     settleStartMs_ = lastMs_;
     stopPending_ = false;
+    needAlarmClear_ = false;
 }
 
 void Controller::fault() {
@@ -87,6 +88,8 @@ void Controller::tick(const Inputs& in) {
     }
     if (run && !runOn_) {
         runOn_ = true;
+        // A restart inside the stop-confirm window continues the same call for water.
+        if (!stopPending_) cycleMs_ = 0;
         stopPending_ = false;
         emit(EventType::Demand, 0);
     } else if (!run && runOn_) {
@@ -110,14 +113,21 @@ void Controller::tick(const Inputs& in) {
             break;
         case State::Settling:
             // Alarm stays asserted (F26) while Aux is open, so ignore it until the drive restarts.
-            if ((now - settleStartMs_) >= s_.graceS * 1000u) state_ = State::Armed;
+            // A running pump proves the drive has restarted, so later alarms are real faults.
+            if (runOn_) {
+                state_ = State::Armed;
+                needAlarmClear_ = alarm;  // the F26 alarm may still be releasing
+            } else if ((now - settleStartMs_) >= s_.graceS * 1000u) {
+                state_ = State::Armed;
+            }
             break;
         case State::Armed:
             break;
     }
 
     if (state_ == State::Armed) {
-        if (alarm) {
+        if (needAlarmClear_ && !alarm) needAlarmClear_ = false;
+        if (alarm && !needAlarmClear_) {
             fault();
         } else if (stopPending_ && (now - stopAtMs_) >= kStopConfirmMs) {
             cleanStop();

@@ -83,7 +83,7 @@ private:
     void resumeAfterBackoff();
 
     static constexpr uint32_t kRunDebounceMs = 500;
-    static constexpr uint32_t kAlarmDebounceMs = 2000;
+    static constexpr uint32_t kAlarmDebounceMs = 500;
     // Drive may drop Run slightly before raising Alarm.
     static constexpr uint32_t kStopConfirmMs = 3000;
 
@@ -97,6 +97,7 @@ private:
     Debounce run_, alarm_;
     bool runOn_ = false;
     bool stopPending_ = false;
+    bool needAlarmClear_ = false;
     uint32_t stopAtMs_ = 0;
     uint32_t settleStartMs_ = 0;
     uint32_t lastMs_ = 0;

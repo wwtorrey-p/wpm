@@ -37,8 +37,8 @@ static bool authorized(httpd_req_t* req) {
             }
         }
     }
+    // No WWW-Authenticate header: the UI has its own login form, not the browser prompt.
     httpd_resp_set_status(req, "401 Unauthorized");
-    httpd_resp_set_hdr(req, "WWW-Authenticate", "Basic realm=\"pump\"");
     httpd_resp_send(req, "Unauthorized", HTTPD_RESP_USE_STRLEN);
     return false;
 }
@@ -199,6 +199,14 @@ static esp_err_t getLog(httpd_req_t* req) {
     return sendJson(req, arr);
 }
 
+static esp_err_t deleteLog(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    g_app->lock();
+    g_app->clearLog();
+    g_app->unlock();
+    return sendJson(req, cJSON_CreateArray());
+}
+
 static esp_err_t getHistory(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     cJSON* arr = cJSON_CreateArray();
@@ -236,7 +244,7 @@ static const char* mimeFor(const std::string& path) {
 }
 
 static esp_err_t serveStatic(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
+    // The UI shell is public so the login page can load; all data is behind /api auth.
     std::string uri = req->uri;
     uri = uri.substr(0, uri.find('?'));
     if (uri == "/" || uri.find("..") != std::string::npos) uri = "/index.html";
@@ -281,6 +289,7 @@ bool startWebServer(App& app) {
         {"/api/settings", HTTP_PUT, putSettings, nullptr},
         {"/api/control", HTTP_POST, postControl, nullptr},
         {"/api/log", HTTP_GET, getLog, nullptr},
+        {"/api/log", HTTP_DELETE, deleteLog, nullptr},
         {"/api/history", HTTP_GET, getHistory, nullptr},
         {"/api/password", HTTP_POST, postPassword, nullptr},
         {"/*", HTTP_GET, serveStatic, nullptr},  // must stay last

@@ -1,9 +1,31 @@
+let auth = sessionStorage.getItem('auth');
+let onAuthLost = () => {};
+
+export const setOnAuthLost = (fn) => { onAuthLost = fn; };
+export const hasCredentials = () => !!auth;
+
+const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+
+export function setCredentials(user, pass) {
+  auth = b64(`${user}:${pass}`);
+  sessionStorage.setItem('auth', auth);
+}
+
+export function clearCredentials() {
+  auth = null;
+  sessionStorage.removeItem('auth');
+}
+
 export async function api(path, method = 'GET', body) {
-  const res = await fetch(path, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const headers = {};
+  if (auth) headers.Authorization = `Basic ${auth}`;
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 401) {
+    clearCredentials();
+    onAuthLost();
+    throw new Error('Unauthorized');
+  }
   if (!res.ok) throw new Error((await res.text()) || res.statusText);
   const type = res.headers.get('content-type') || '';
   return type.includes('json') ? res.json() : res.text();

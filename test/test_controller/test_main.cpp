@@ -135,6 +135,46 @@ void test_backoff_waits_for_time() {
     TEST_ASSERT_EQUAL_INT64(kT0 + 3600, c.status().p.backoffEndEpoch);
 }
 
+void test_demand_resets_cycle_gallons() {
+    Rig r;
+    r.advance(65);
+    r.run = true;
+    r.advance(60);
+    r.alarm = true;  // fault ends the call without a clean stop
+    r.advance(3);
+    r.run = false;  // the drive stops once Aux opens
+    r.advance(2);
+    r.alarm = false;
+    r.c.endBackoffNow();
+    r.advance(65);
+    TEST_ASSERT_TRUE(r.c.status().cycleGallons > 4.0f);
+    r.run = true;
+    r.advance(3);
+    TEST_ASSERT_TRUE(r.c.status().cycleGallons < 1.0f);
+}
+
+void test_fault_while_running_is_immediate() {
+    Rig r;
+    r.advance(5);  // still inside the settle delay
+    r.run = true;
+    r.advance(5);
+    r.alarm = true;
+    r.advance(2);
+    TEST_ASSERT_EQUAL_INT(1, r.count(EventType::Fault));
+    TEST_ASSERT_FALSE(r.c.auxClosed());
+}
+
+void test_stale_alarm_after_restart_is_ignored() {
+    Rig r;
+    r.alarm = true;  // F26 still releasing when the pump starts
+    r.advance(10);
+    r.run = true;
+    r.advance(1);
+    r.alarm = false;
+    r.advance(5);
+    TEST_ASSERT_EQUAL_INT(0, r.count(EventType::Fault));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_fault_opens_aux_and_doubles);
@@ -144,5 +184,8 @@ int main() {
     RUN_TEST(test_cap);
     RUN_TEST(test_manual_disable_and_reset);
     RUN_TEST(test_backoff_waits_for_time);
+    RUN_TEST(test_demand_resets_cycle_gallons);
+    RUN_TEST(test_fault_while_running_is_immediate);
+    RUN_TEST(test_stale_alarm_after_restart_is_ignored);
     return UNITY_END();
 }

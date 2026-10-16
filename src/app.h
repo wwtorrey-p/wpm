@@ -43,6 +43,7 @@ public:
     int64_t epoch() const { return epoch_; }
     bool defaultPassword() const { return cred_.isDefault; }
     void applySettings(const pump::Settings& s);
+    void clearLog();
     bool checkPassword(const std::string& user, const std::string& pass) const;
     bool setPassword(const std::string& pass);
 
