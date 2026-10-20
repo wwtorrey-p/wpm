@@ -13,9 +13,9 @@ bool Controller::Debounce::update(bool in, uint32_t now, uint32_t holdMs) {
     return stable;
 }
 
-void Controller::emit(EventType t, uint32_t arg) {
+void Controller::emit(EventType t, uint32_t arg, float gallons) {
     dirty_ = true;
-    if (onEvent_) onEvent_(Event{epoch_, t, arg});
+    if (onEvent_) onEvent_(Event{epoch_, t, arg, gallons});
 }
 
 void Controller::begin(const Settings& s, const Persisted& p, uint32_t nowMs, int64_t epoch) {
@@ -24,6 +24,9 @@ void Controller::begin(const Settings& s, const Persisted& p, uint32_t nowMs, in
     lastMs_ = nowMs;
     epoch_ = epoch;
     if (p_.nextBackoffS < s_.initialBackoffS) p_.nextBackoffS = s_.initialBackoffS;
+    // With nothing known yet, assume the lower level so the estimate errs on the short side.
+    if (capacity_ < 0) capacity_ = s_.lowLevelGal;
+    capacity_ = std::min(capacity_, kMaxCapacityGal);
     emit(EventType::Boot, 0);
     if (!p_.enabled) {
         state_ = State::Disabled;
@@ -60,8 +63,9 @@ void Controller::fault() {
 
 void Controller::cleanStop() {
     stopPending_ = false;
-    emit(EventType::RunEnd, cycleMs_ / 1000);
-    cycleMs_ = 0;
+    capacity_ = s_.highLevelGal;  // a clean stop means the level reached its known high point
+    capStep_ = true;
+    // The run time and gallons of this demand stay readable until the next one starts.
     p_.nextBackoffS = s_.initialBackoffS;
 }
 
@@ -85,17 +89,27 @@ void Controller::tick(const Inputs& in) {
     if (runOn_) {
         cycleMs_ += dt;
         unreportedMs_ += dt;
+        capacity_ = std::min(kMaxCapacityGal, capacity_ + dt * s_.gpm / 60000.0f);
     }
     if (run && !runOn_) {
         runOn_ = true;
         // A restart inside the stop-confirm window continues the same call for water.
-        if (!stopPending_) cycleMs_ = 0;
+        if (!stopPending_) {
+            cycleMs_ = 0;
+            // A start with no fault or back-off in play means the level is at its known low point.
+            if (state_ == State::Armed && !p_.backoffActive) {
+                capacity_ = s_.lowLevelGal;
+                capStep_ = true;
+            }
+        }
         stopPending_ = false;
         emit(EventType::Demand, 0);
     } else if (!run && runOn_) {
         runOn_ = false;
         stopPending_ = true;
         stopAtMs_ = now;
+        // Logged for every stop, whatever the cause; whether it was clean is decided after the confirm delay.
+        emit(EventType::RunEnd, cycleMs_ / 1000, static_cast<float>(cycleMs_) / 60000.0f * s_.gpm);
     }
 
     switch (state_) {
@@ -179,7 +193,7 @@ uint32_t Controller::takeRunSeconds() {
 
 Status Controller::status() const {
     return Status{state_, auxClosed_, runOn_, alarm_.stable,
-                  static_cast<float>(cycleMs_) / 60000.0f * s_.gpm, p_};
+                  static_cast<float>(cycleMs_) / 60000.0f * s_.gpm, p_, capacity_, cycleMs_ / 1000};
 }
 
 }  // namespace pump

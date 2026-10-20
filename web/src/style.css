@@ -137,6 +137,26 @@ button.tile.clickable:active { transform: scale(.98); }
 .tile.fault { color: var(--red); }
 @keyframes pulse { 50% { opacity: .45; transform: scale(.94); } }
 
+/* Capacity gauge */
+.gauge { margin-top: 1.25rem; }
+.gauge-head { display: flex; justify-content: space-between; margin-bottom: .4rem; }
+.gauge-bar {
+  position: relative;
+  height: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: visible;
+}
+.gauge-fill { height: 100%; background: var(--accent); border-radius: 6px; }
+.gauge-tick {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--amber);
+}
+
 /* Metrics */
 .metrics { margin-top: 1.25rem; }
 .metric {
@@ -153,9 +173,23 @@ button.tile.clickable:active { transform: scale(.98); }
 
 /* Chart */
 .chart { width: 100%; }
-.chart rect { fill: var(--accent); }
-.chart .target { stroke: var(--amber); stroke-dasharray: 4; }
-.chart text { font-size: 10px; fill: var(--muted); }
+.chart .grid { stroke: var(--border); stroke-width: 1; }
+.chart text { font-size: 15px; fill: var(--muted); }
+.chart .axis-cap { fill: var(--accent); }
+.chart .axis-rate { fill: var(--amber); }
+.chart .cap-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.chart .rate-line { fill: none; stroke: var(--amber); stroke-width: 2; stroke-linejoin: round; }
+.chart .cap-dot { fill: var(--accent); }
+.chart .target { stroke: var(--amber); stroke-dasharray: 4; opacity: .6; }
+.chart-range { display: flex; gap: .4rem; justify-content: flex-end; margin-bottom: .25rem; }
+.chart-range button { padding: .25rem .7rem; background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); }
+.chart-range button.on { color: var(--text); border-color: var(--accent); }
+.legend { display: flex; flex-direction: column; align-items: flex-start; gap: .25rem; margin-top: .5rem; font-size: .8rem; color: var(--muted); }
+.swatch { display: inline-block; width: 18px; height: 3px; margin-right: .35rem; vertical-align: middle; border-radius: 2px; }
+.swatch.cap { background: var(--accent); }
+.swatch.rate { background: var(--amber); }
+.swatch.target { background: repeating-linear-gradient(90deg, var(--amber) 0 4px, transparent 4px 8px); }
+.chart-note { margin: .75rem 0 0; font-size: .85rem; }
 
 /* Forms */
 label { display: block; margin-bottom: 1rem; color: var(--muted); font-size: .9rem; }
@@ -208,6 +242,8 @@ button.danger {
   color: var(--red);
 }
 button.danger:disabled { opacity: .4; cursor: default; }
+.progress { display: block; width: 100%; margin-bottom: 1rem; }
+input[type=file] { padding: .5rem; }
 
 /* Event log */
 table { width: 100%; border-collapse: collapse; }

@@ -1,11 +1,11 @@
 import { useState } from 'preact/hooks';
-import { api, fmtDuration, fmtTime } from './api.js';
+import { api, fmtDuration, fmtRuntime, fmtTime } from './api.js';
 import { usePolling } from './hooks.js';
 
 const LABELS = {
   boot: 'Controller started',
-  demand: 'Call for water',
-  run_end: 'Pump stopped',
+  demand: 'Pump on',
+  run_end: 'Pump off',
   fault: 'Fault',
   recovery: 'Back-off ended',
   disabled: 'Disabled',
@@ -14,7 +14,7 @@ const LABELS = {
 };
 
 function describe(e) {
-  if (e.type === 'run_end') return `Pump stopped, ran ${fmtDuration(e.arg)}`;
+  if (e.type === 'run_end') return `Pump off, ran ${fmtRuntime(e.arg)}, ${Math.round(e.gal)} gal`;
   if (e.type === 'fault') return `Fault, back-off ${fmtDuration(e.arg)}`;
   return LABELS[e.type] || e.type;
 }

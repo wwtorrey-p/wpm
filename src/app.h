@@ -9,10 +9,22 @@
 
 constexpr int kMaxEvents = 100;
 constexpr int kHistoryDays = 90;
+constexpr int kCapSamples = 256;
 
 struct DayBucket {
     uint32_t day;  // days since epoch (UTC); 0 = unused
     float gallons;
+};
+
+struct CapSample {
+    uint32_t epoch;
+    float gallons;
+};
+
+struct CapHistory {
+    uint32_t head;  // next write slot
+    uint32_t count;
+    CapSample samples[kCapSamples];
 };
 
 struct Credentials {
@@ -39,6 +51,7 @@ public:
     // Callers must hold the lock.
     pump::Controller& controller() { return ctl_; }
     const EventLog& events() const { return log_; }
+    const CapHistory& capacityHistory() const { return cap_; }
     const std::array<DayBucket, kHistoryDays>& history() const { return days_; }
     int64_t epoch() const { return epoch_; }
     bool defaultPassword() const { return cred_.isDefault; }
@@ -51,10 +64,15 @@ private:
     void onEvent(const pump::Event& e);
     void addRunTime(uint32_t seconds);
     void savePersisted();
+    void pushCapacity(int64_t epoch, float gallons);
 
     SemaphoreHandle_t mutex_ = xSemaphoreCreateMutex();
     pump::Controller ctl_{[this](const pump::Event& e) { onEvent(e); }};
     EventLog log_{};
+    CapHistory cap_{};
+    float capBefore_ = 0;       // capacity just before the current tick, for step-shaped corrections
+    int64_t lastCapEpoch_ = 0;  // time of the newest sample
+    bool capDirty_ = false;
     std::array<DayBucket, kHistoryDays> days_{};
     Credentials cred_{};
     int64_t epoch_ = 0;

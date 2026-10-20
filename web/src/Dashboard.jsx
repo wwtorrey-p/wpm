@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, fmtDuration, fmtTime } from './api.js';
-import { GallonsChart } from './Chart.jsx';
+import { api, fmtDuration, fmtRuntime, fmtTime } from './api.js';
+import { CapacityChart } from './CapacityChart.jsx';
 import { EventLog } from './EventLog.jsx';
 import { usePolling } from './hooks.js';
 import {
@@ -34,6 +34,24 @@ function Tile({ title, kind, def, action }) {
     : <div class={`tile ${kind}`}>{body}</div>;
 }
 
+// Running capacity estimate with ticks at the known low and high levels it is corrected to.
+function Gauge({ gallons, max, low, high }) {
+  const pct = (v) => `${Math.max(0, Math.min(100, (v / max) * 100))}%`;
+  return (
+    <div class="gauge">
+      <div class="gauge-head">
+        <span class="metric-label">Estimated capacity</span>
+        <span class="metric-value">{Math.round(gallons)} / {Math.round(max)} gal</span>
+      </div>
+      <div class="gauge-bar" role="img" aria-label={`Capacity ${Math.round(gallons)} of ${Math.round(max)} gallons`}>
+        <div class="gauge-fill" style={{ width: pct(gallons) }} />
+        {low != null && <span class="gauge-tick" style={{ left: pct(low) }} title={`Low ${low} gal`} />}
+        {high != null && <span class="gauge-tick" style={{ left: pct(high) }} title={`High ${high} gal`} />}
+      </div>
+    </div>
+  );
+}
+
 function Metric({ label, value }) {
   return (
     <div class="metric">
@@ -49,9 +67,11 @@ export function Dashboard({ onSignOut }) {
   const [notice, setNotice] = useState('');
   const [st, err, setSt] = usePolling(() => api('/api/status'), 5000);
   const [hist] = usePolling(() => api('/api/history'), 60000);
-  const [target, setTarget] = useState(0);
+  const [capHist] = usePolling(() => api('/api/capacity'), 60000);
+  const [settings, setSettings] = useState(null);
+  const target = settings ? settings.targetGalPerDay : 0;
 
-  useEffect(() => { api('/api/settings').then((s) => setTarget(s.targetGalPerDay)).catch(() => {}); }, []);
+  useEffect(() => { api('/api/settings').then(setSettings).catch(() => {}); }, []);
 
   const go = (v) => { setMenuOpen(false); setView(v); };
   const control = async (action) => {
@@ -110,7 +130,7 @@ export function Dashboard({ onSignOut }) {
           <button class="back" onClick={() => setView('home')}><BackIcon size={20} /> Back</button>
         )}
 
-        {view === 'settings' && <Settings onSaved={(s) => setTarget(s.targetGalPerDay)} />}
+        {view === 'settings' && <Settings onSaved={setSettings} />}
         {view === 'log' && <EventLog />}
 
         {view === 'home' && (
@@ -125,6 +145,7 @@ export function Dashboard({ onSignOut }) {
                   <Tile title="Control" kind={mode} def={MODES[mode]} action={modeAction} />
                   <Tile title="Pump" kind={pump} def={PUMPS[pump]} />
                 </div>
+                <Gauge gallons={st.capacityGal} max={st.maxCapacityGal} low={settings && settings.lowLevelGal} high={settings && settings.highLevelGal} />
                 <div class="metrics">
                   {st.state === 'backoff' && (
                     <>
@@ -138,15 +159,23 @@ export function Dashboard({ onSignOut }) {
                   <Metric label="Faults" value={st.faultCount} />
                   <Metric label="Total run time" value={fmtDuration(st.totalRunS)} />
                   <Metric label="Gallons this demand" value={`${st.cycleGallons.toFixed(0)} gal`} />
-                  <Metric label="Average, last 30 days" value={`${(last30 / 30).toFixed(1)} gal/day${target ? ` (target ${target})` : ''}`} />
+                  <Metric label="Demand runtime" value={fmtRuntime(st.cycleRunS)} />
+                  <Metric label="Average, last 30 days" value={<>{(last30 / 30).toFixed(1)} gal/day{target ? <span class="sub">(target {target})</span> : null}</>} />
                 </div>
               </section>
             )}
             {!st && !err && <p class="muted">Loading...</p>}
             <section class="card">
-              <h2>Capacity</h2>
-              <p class="muted small">Estimated gallons pumped per day</p>
-              <GallonsChart history={hist || []} target={target} />
+              <h2>Level</h2>
+              <p class="muted small">Estimated water level and average pump rate</p>
+              <CapacityChart
+                samples={capHist || []}
+                history={hist || []}
+                now={st ? st.epoch : 0}
+                capacity={st ? st.capacityGal : 0}
+                max={st ? st.maxCapacityGal : 2000}
+                target={target}
+              />
             </section>
           </>
         )}

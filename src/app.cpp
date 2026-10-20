@@ -34,9 +34,14 @@ static void makeCredentials(Credentials& c, const std::string& pass, bool isDefa
 void App::init() {
     pump::Settings s;
     pump::Persisted p;
-    storage::load("settings", s);
+    storage::loadPrefix("settings", s);
     storage::load("persist", p);
-    storage::load("events", log_);
+    float capacity = -1.0f;
+    if (storage::load("capacity", capacity)) ctl_.restoreCapacity(capacity);
+    // The event record gained a field, so the log moved to a new key; drop the old one to free its flash.
+    storage::erase("events");
+    storage::load("events2", log_);
+    storage::loadPrefix("caphist", cap_);
     storage::load("days", days_);
     if (!storage::load("cred", cred_)) {
         makeCredentials(cred_, "admin", true);
@@ -51,11 +56,22 @@ void App::onEvent(const pump::Event& e) {
     log_.events[log_.head] = e;
     log_.head = (log_.head + 1) % kMaxEvents;
     if (log_.count < kMaxEvents) log_.count++;
-    storage::save("events", log_);
+    storage::save("events2", log_);
+}
+
+void App::pushCapacity(int64_t epoch, float gallons) {
+    if (epoch <= 0) return;  // no wall-clock time yet
+    cap_.samples[cap_.head] = CapSample{(uint32_t)epoch, gallons};
+    cap_.head = (cap_.head + 1) % kCapSamples;
+    if (cap_.count < kCapSamples) cap_.count++;
+    lastCapEpoch_ = epoch;
+    capDirty_ = true;
 }
 
 void App::savePersisted() {
-    storage::save("persist", ctl_.status().p);
+    const pump::Status st = ctl_.status();
+    storage::save("persist", st.p);
+    storage::save("capacity", st.capacityGal);
     ctl_.takeDirty();
 }
 
@@ -71,8 +87,19 @@ void App::addRunTime(uint32_t seconds) {
 void App::tick(bool run, bool alarm) {
     lock();
     epoch_ = wallClock();
+    capBefore_ = ctl_.status().capacityGal;
     ctl_.tick(pump::Inputs{(uint32_t)(esp_timer_get_time() / 1000), epoch_, run, alarm});
     tickCount_++;
+    // A correction is a step: record the level just before and just after it at the same time.
+    if (ctl_.takeCapacityStep()) {
+        const float after = ctl_.status().capacityGal;
+        if (after != capBefore_) pushCapacity(epoch_, capBefore_);
+        pushCapacity(epoch_, after);
+    }
+    // While the pump runs the estimate climbs steadily, so sample it every 10 minutes.
+    if (ctl_.status().running && epoch_ > 0 && epoch_ - lastCapEpoch_ >= 600) {
+        pushCapacity(epoch_, ctl_.status().capacityGal);
+    }
     if (tickCount_ % 10 == 0) {
         if (uint32_t s = ctl_.takeRunSeconds()) addRunTime(s);
     }
@@ -82,6 +109,10 @@ void App::tick(bool run, bool alarm) {
         savePersisted();
         storage::save("days", days_);
         historyDirty_ = false;
+    }
+    if (tickCount_ % 600 == 0 && capDirty_) {
+        storage::save("caphist", cap_);
+        capDirty_ = false;
     }
     unlock();
 }
@@ -94,7 +125,7 @@ void App::applySettings(const pump::Settings& s) {
 
 void App::clearLog() {
     log_ = EventLog{};
-    storage::save("events", log_);
+    storage::save("events2", log_);
 }
 
 bool App::checkPassword(const std::string& user, const std::string& pass) const {

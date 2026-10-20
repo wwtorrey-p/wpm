@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api, setCredentials } from './api.js';
+import { Firmware } from './Firmware.jsx';
 import { PasswordInput } from './PasswordInput.jsx';
 
 export function Settings({ onSaved }) {
@@ -50,6 +51,8 @@ export function Settings({ onSaved }) {
         {field('graceS', 'Restart check delay (s, min 35)', 1)}
         {field('gpm', 'Pump rate (gal/min)')}
         {field('targetGalPerDay', 'Target (gal/day)')}
+        {field('lowLevelGal', 'Low level: capacity when the pump starts (gal)')}
+        {field('highLevelGal', 'High level: capacity when the pump stops cleanly (gal, max 2000)')}
         <div class="row"><button type="submit" class="primary">Save</button><span class="muted">{msg}</span></div>
       </form>
       <form onSubmit={changePassword} class="card">
@@ -60,6 +63,7 @@ export function Settings({ onSaved }) {
           onInput={(v) => { setPw2(v); setPwMsg(''); }} required />
         <div class="row"><button type="submit" class="primary">Change</button><span class={pwMsg === 'Password changed' ? 'muted' : 'error'}>{pwMsg}</span></div>
       </form>
+      <Firmware />
     </>
   );
 }

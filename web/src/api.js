@@ -31,6 +31,30 @@ export async function api(path, method = 'GET', body) {
   return type.includes('json') ? res.json() : res.text();
 }
 
+export function uploadFirmware(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/firmware');
+    if (auth) xhr.setRequestHeader('Authorization', `Basic ${auth}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onload = () => {
+      if (xhr.status === 401) { clearCredentials(); onAuthLost(); reject(new Error('Unauthorized')); }
+      else if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(xhr.responseText || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error('Upload failed'));
+    xhr.send(file);
+  });
+}
+
+export function fmtRuntime(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  return h ? `${h}h ${m}m ${r}s` : m ? `${m}m ${r}s` : `${r}s`;
+}
+
 export function fmtDuration(s) {
   if (!s) return '0m';
   const d = Math.floor(s / 86400);

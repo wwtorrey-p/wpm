@@ -10,15 +10,22 @@ enum class EventType : uint8_t { Boot, Demand, RunEnd, Fault, Recovery, Disabled
 struct Event {
     int64_t epoch;
     EventType type;
-    uint32_t arg;  // RunEnd: run seconds this cycle; Fault/Recovery: back-off seconds
+    uint32_t arg;   // RunEnd: run seconds this demand; Fault/Recovery: back-off seconds
+    float gallons;  // RunEnd: gallons pumped this demand
 };
 
+// Upper limit of the capacity estimate, in gallons.
+constexpr float kMaxCapacityGal = 2000.0f;
+
+// New fields go at the end: older saved blobs are shorter and keep defaults for what they lack.
 struct Settings {
     uint32_t initialBackoffS = 48 * 3600;
     uint32_t maxBackoffS = 30 * 86400;
     uint32_t graceS = 60;
     float gpm = 5.0f;
     float targetGalPerDay = 50.0f;
+    float lowLevelGal = 1400.0f;   // capacity when a call for water starts
+    float highLevelGal = 1700.0f;  // capacity when the pump stops without a fault
 };
 
 struct Persisted {
@@ -45,6 +52,8 @@ struct Status {
     bool alarm;
     float cycleGallons;
     Persisted p;
+    float capacityGal;
+    uint32_t cycleRunS;  // run time of the current or most recent demand
 };
 
 class Controller {
@@ -60,10 +69,14 @@ public:
     void resetBackoff();    // back to the initial duration and resume
     void endBackoffNow();   // resume, keeping the escalated duration
     void setSettings(const Settings& s);
+    // Restores the saved capacity estimate. Call before begin().
+    void restoreCapacity(float gallons) { capacity_ = gallons; }
 
     // Whole seconds of pump run time since the last call.
     uint32_t takeRunSeconds();
     bool takeDirty() { bool d = dirty_; dirty_ = false; return d; }
+    // True once after the capacity estimate was snapped to the low or high level.
+    bool takeCapacityStep() { bool s = capStep_; capStep_ = false; return s; }
 
     bool auxClosed() const { return auxClosed_; }
     Status status() const;
@@ -76,7 +89,7 @@ private:
         bool update(bool in, uint32_t now, uint32_t holdMs);
     };
 
-    void emit(EventType t, uint32_t arg);
+    void emit(EventType t, uint32_t arg, float gallons = 0);
     void enterSettling();
     void fault();
     void cleanStop();
@@ -93,6 +106,7 @@ private:
     State state_ = State::Disabled;
     bool auxClosed_ = false;
     bool dirty_ = false;
+    bool capStep_ = false;
 
     Debounce run_, alarm_;
     bool runOn_ = false;
@@ -102,6 +116,7 @@ private:
     uint32_t settleStartMs_ = 0;
     uint32_t lastMs_ = 0;
     uint32_t cycleMs_ = 0;
+    float capacity_ = -1.0f;  // negative until restored or first set
     uint32_t unreportedMs_ = 0;
     int64_t epoch_ = 0;
 };
