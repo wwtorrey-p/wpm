@@ -12,11 +12,13 @@ const MODES = {
   enabled: { label: 'Enabled', Icon: EnabledIcon },
   disabled: { label: 'Disabled', Icon: DisabledIcon },
   backoff: { label: 'Backoff', Icon: BackoffIcon },
+  run_backoff: { label: 'Run limit', Icon: BackoffIcon },
 };
 const PUMPS = {
   off: { label: 'Off', Icon: PumpOffIcon },
   on: { label: 'On', Icon: PumpOnIcon },
   fault: { label: 'Fault', Icon: FaultIcon },
+  limit: { label: 'Run limit', Icon: FaultIcon },
 };
 
 function Tile({ title, kind, def, action }) {
@@ -83,7 +85,9 @@ export function Dashboard({ onSignOut }) {
     else setMenuOpen(false);
   };
 
-  const mode = !st ? 'enabled' : st.state === 'disabled' ? 'disabled' : st.state === 'backoff' ? 'backoff' : 'enabled';
+  const mode = !st ? 'enabled' : st.state === 'disabled' ? 'disabled'
+    : st.state === 'backoff' ? 'backoff' : st.state === 'run_backoff' ? 'run_backoff' : 'enabled';
+  const isRunBackoff = st && st.state === 'run_backoff';
   const modeAction = {
     enabled: { hint: 'Tap to disable', run: () => control('disable') },
     disabled: { hint: 'Tap to enable', run: () => control('enable') },
@@ -91,14 +95,20 @@ export function Dashboard({ onSignOut }) {
       hint: 'Tap to end back-off',
       run: () => { if (confirm('End the back-off now and allow the pump to run?')) control('skip'); },
     },
+    run_backoff: {
+      hint: 'Tap to end run-limit back-off',
+      run: () => { if (confirm('End the run-limit back-off now and allow the pump to run?')) control('skip'); },
+    },
   }[mode];
   // The drive's alarm also fires (F26) while we hold Aux open, so it only means a fault when armed.
   const pump = !st ? 'off'
-    : st.state === 'backoff' || (st.state === 'armed' && st.alarm) ? 'fault' : st.running ? 'on' : 'off';
+    : isRunBackoff ? 'limit'
+      : st.state === 'backoff' || (st.state === 'armed' && st.alarm) ? 'fault' : st.running ? 'on' : 'off';
 
   const today = Math.floor(Date.now() / 86400000);
   const last30 = (hist || []).filter((h) => h.day > today - 30).reduce((a, h) => a + h.gallons, 0);
-  const waitLeft = st && st.state === 'backoff' && st.backoffEnd ? Math.max(0, st.backoffEnd - st.epoch) : 0;
+  const waitEnd = isRunBackoff ? st.runBackoffEnd : st && st.backoffEnd;
+  const waitLeft = st && (st.state === 'backoff' || isRunBackoff) && waitEnd ? Math.max(0, waitEnd - st.epoch) : 0;
 
   return (
     <div class="app">
@@ -117,7 +127,8 @@ export function Dashboard({ onSignOut }) {
                 ? <button onClick={() => control('disable')}>Disable pump</button>
                 : <button onClick={() => control('enable')}>Enable pump</button>)}
               <button onClick={reset}>Reset back-off</button>
-              {st && st.state === 'backoff' && <button onClick={() => control('skip')}>End back-off now</button>}
+              {st && (st.state === 'backoff' || st.state === 'run_backoff') &&
+                <button onClick={() => control('skip')}>End back-off now</button>}
               <button class="divider" onClick={onSignOut}>Sign out</button>
             </nav>
           </>
@@ -147,11 +158,12 @@ export function Dashboard({ onSignOut }) {
                 </div>
                 <Gauge gallons={st.capacityGal} max={st.maxCapacityGal} low={settings && settings.lowLevelGal} high={settings && settings.highLevelGal} />
                 <div class="metrics">
-                  {st.state === 'backoff' && (
+                  {(st.state === 'backoff' || isRunBackoff) && (
                     <>
-                      <Metric label="Back-off length" value={fmtDuration(st.curBackoffS)} />
-                      <Metric label="Retry" value={st.backoffEnd
-                        ? <>{fmtTime(st.backoffEnd)}<span class="sub">in {fmtDuration(waitLeft)}</span></>
+                      <Metric label={isRunBackoff ? 'Run-limit back-off' : 'Back-off length'}
+                        value={isRunBackoff ? fmtDuration(settings ? settings.runBackoffM * 60 : 0) : fmtDuration(st.curBackoffS)} />
+                      <Metric label="Retry" value={waitEnd
+                        ? <>{fmtTime(waitEnd)}<span class="sub">in {fmtDuration(waitLeft)}</span></>
                         : 'waiting for clock'} />
                     </>
                   )}

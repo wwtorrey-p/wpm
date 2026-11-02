@@ -250,6 +250,41 @@ void test_last_run_numbers_stay_until_next_start() {
     TEST_ASSERT_TRUE(r.c.status().cycleRunS < 5);
 }
 
+void test_run_limit_starts_separate_backoff_and_recovers() {
+    Rig r;
+    Settings s;
+    s.maxRunS = 60;
+    s.runBackoffS = 120;
+    r.c.setSettings(s);
+    r.advance(60);
+    r.run = true;
+    r.advance(65);
+    TEST_ASSERT_EQUAL_INT(1, r.count(EventType::RunLimit));
+    TEST_ASSERT_FALSE(r.c.auxClosed());
+    TEST_ASSERT_TRUE(r.c.status().p.runBackoffActive);
+    TEST_ASSERT_EQUAL_UINT32(48 * 3600, r.c.status().p.nextBackoffS);
+
+    r.run = false;
+    r.advance(125);
+    TEST_ASSERT_EQUAL_INT(1, r.count(EventType::RunRecovery));
+    TEST_ASSERT_TRUE(r.c.auxClosed());
+}
+
+void test_fault_takes_precedence_over_run_limit() {
+    Rig r;
+    Settings s;
+    s.maxRunS = 60;
+    r.c.setSettings(s);
+    r.advance(60);
+    r.run = true;
+    r.advance(55);
+    r.alarm = true;
+    r.advance(10);
+    TEST_ASSERT_EQUAL_INT(1, r.count(EventType::Fault));
+    TEST_ASSERT_EQUAL_INT(0, r.count(EventType::RunLimit));
+    TEST_ASSERT_FALSE(r.c.status().p.runBackoffActive);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_fault_opens_aux_and_doubles);
@@ -268,5 +303,7 @@ int main() {
     RUN_TEST(test_capacity_is_capped);
     RUN_TEST(test_pump_off_event_records_runtime_and_gallons);
     RUN_TEST(test_last_run_numbers_stay_until_next_start);
+    RUN_TEST(test_run_limit_starts_separate_backoff_and_recovers);
+    RUN_TEST(test_fault_takes_precedence_over_run_limit);
     return UNITY_END();
 }

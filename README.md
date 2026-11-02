@@ -4,9 +4,10 @@ ESP32-S3 firmware and web UI that monitors a Franklin Electric SubDrive/MonoDriv
 
 ## Overview
 
-The well recovers only about 50 gal/day, but a single demand pumps roughly 600 gal. The drive's own restart delay (Underload "Off Time") is too short, so this device gates the drive's Aux Input and applies its own back-off:
+The well recovers only about 50 gal/day, but a single demand pumps roughly 600 gal. The drive's own restart delay (Underload "Off Time") is too short, so this device gates the float's call-for-water loop and applies its own back-off:
 
-- Any drive fault (Alarm relay) opens the Aux contact and starts a back-off. The first back-off is user-set (default 48 h), and each further fault doubles it up to a cap (default 30 days).
+- Any drive fault (Alarm relay) opens the float loop and starts a back-off. The first back-off is user-set (default 48 h), and each further fault doubles it up to a cap (default 30 days).
+- If a pump call runs continuously for the maximum run time (default 10 minutes), the float loop opens and a separate run-limit back-off starts (default 24 hours). This limit can be disabled by setting it to 0. A drive fault always takes precedence over the run-time limit.
 - When a back-off ends, the pump is allowed to run again.
 - The first time the pump stops with no fault, the back-off resets to the initial value.
 - The pump can also be disabled manually, and the back-off can be reset or ended early.
@@ -20,19 +21,17 @@ Status: the firmware and web UI build and run on the board. The bench tests belo
 
 Board: Lonely Binary ESP32-S3 N16R8 with the PinPulse shield (LED shield only, no I/O).
 
-| Signal      | GPIO | Connection                                                                                                                            |
-| ----------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Run sense   | 4    | Drive System Run relay dry contact between GPIO and GND (internal pull-up; closed = running)                                          |
-| Alarm sense | 5    | Drive System Alarm relay dry contact between GPIO and GND (closed = fault)                                                            |
-| Aux control | 6    | Drives a relay module (3.3 V logic). Its NC contact connects the drive's +24 terminal to Aux In. Low = relay off = contact closed = pump allowed. High = relay energized = pump stopped |
-| Status LED  | 48   | On-board WS2812                                                                                                                       |
+| Signal             | GPIO | Connection                                                                                                                                                                                                                       |
+| ------------------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run sense          | 5    | Drive System Run relay dry contact between GPIO and GND (internal pull-up; closed = running)                                                                                                                                     |
+| Alarm sense        | 15   | Drive System Alarm relay dry contact between GPIO and GND (closed = fault)                                                                                                                                                       |
+| Float gate control | 6    | Drives the relay module's 3.3 V-compatible input. Its NC contact is in series with the float's call-for-water loop. Low = relay off = contact closed = float signal passed. High = relay energized = contact open = pump blocked |
+| Status LED         | 48   | On-board WS2812                                                                                                                                                                                                                  |
 
-Drive configuration (FE Connect app):
+The float is normally open and closes when water is needed. Put the relay's COM and NC contacts in series with the existing float/pressure-sensor input loop. With the relay de-energized, NC passes the float signal; when the relay is energized, the loop opens and the pump cannot receive a call for water. If the ESP or relay module loses power, NC closes and the float loop remains available.
 
-- Set Auxiliary Input to **Fault with Low**. The drive stops when the contact opens and restarts about 30 s after it closes. A broken wire to Aux In also stops the pump. If the ESP loses power the relay drops out and the pump is allowed to run, so a back-off is not enforced while the ESP is off or rebooting.
 - The Run and Alarm relay contacts are rated 5 A at 250 VAC / 30 VDC. Use only these low-voltage terminals. Do not switch mains with the ESP.
-- The drive raises F26 whenever Aux is open, which also activates the Alarm relay. The firmware ignores the alarm until a grace period (default 60 s) after it closes Aux, or until the pump starts running (which proves the drive restarted), whichever comes first. Faults while the pump is running are reported after a 0.5 s debounce.
-- Pins 4, 5 and 6 were chosen as free pins on the S3 N16R8. Check them against your wiring, and avoid GPIO 35-37 (octal PSRAM), strapping pins and the USB pins.
+- GPIOs 15, 5 and 6 were chosen as free pins on the screwless base. Check them against your wiring, and avoid GPIO 35-37 (octal PSRAM), strapping pins and the USB pins.
 
 Status LED (dim): red = alarm, blue = running, amber = back-off, white = disabled, green = idle/armed.
 
@@ -44,31 +43,28 @@ Status LED (dim): red = alarm, blue = running, amber = back-off, white = disable
 
   SYSTEM RUN RELAY (dry contact)
     COM ──────────────────────────────────────────────────── GND
-    NO  ───────────────────┬────[ 220 R ]──────────────────── GPIO 4  (internal pull-up)
+    NO  ───────────────────┬────[ 220 R ]──────────────────── GPIO 5  (internal pull-up)
                            └────||── GND   (optional 100 nF)
 
   SYSTEM ALARM RELAY (dry contact)
     COM ──────────────────────────────────────────────────── GND
-    NO  ───────────────────┬────[ 220 R ]──────────────────── GPIO 5  (internal pull-up)
+    NO  ───────────────────┬────[ 220 R ]──────────────────── GPIO 15 (internal pull-up)
                            └────||── GND   (optional 100 nF)
 
-  TRANSDUCER or WET SENSOR terminal                 Relay module (3.3 V logic input)
-    +24 ──────────────────────────────┐              VCC ───── 5V
-                                      │              GND ───── GND
-                                      ├── COM        IN  ───── GPIO 6
-                                      │   (relay NC contact, closed = run allowed)
-    AUX IN ───────────────────────────┴── NC
+  Existing float / pressure-sensor call loop          Relay module (3.3 V logic input)
+    Loop terminal A ───── FLOAT (NO) ───── COM        VCC ───── 5V
+                                             NC ────── GND ───── GND
+                                                      IN  ───── GPIO 6
+    Loop terminal B ─────────────────────────────── pressure-sensor input
 ```
 
 Notes:
 
-- The drive's relay contacts are isolated, so the only shared reference is the ESP GND via the COM wires.
+- The relay contacts are isolated from the ESP and are only inserted in series with the existing float/pressure-sensor loop. Do not connect that loop to ESP GND or to the relay module's power wiring.
 - Run and Alarm each pull their GPIO to GND when the contact closes. The resistor and capacitor are optional filtering for long cable runs.
-- The relay module's switched contact only connects the drive's own +24 to its Aux In. Nothing from the ESP is connected to the 24 V rail.
-- Use a relay module with an opto-isolated or transistor driver and a flyback diode, and confirm its input works at 3.3 V. The firmware drives GPIO 6 high to energize the relay (pump stopped), so set the module's trigger jumper to **High** (an active-low module would do the opposite).
-- Check the coil voltage printed on the relay. A 5 V coil is powered from the 5V pin and a 3.3 V coil from 3V3. Do not power the coil from the drive's +24, which would break the isolation.
-- Use the relay's COM and NC contacts, not NO. The relay is energized only when the pump is disabled or in back-off, and with the relay unpowered the contact is closed and the pump may run.
-- Drive-side wiring is on terminal block labels. See the owner's manual (`ref/`), pages 22-23 and 37.
+- Use a relay module with an opto-isolated or transistor driver and a flyback diode, and confirm its input works at 3.3 V. For the pictured module, power VCC from 5 V, set the trigger jumper to **High**, and connect IN to GPIO 6. GPIO 6 low leaves the relay de-energized with NC closed (pump allowed); GPIO 6 high energizes it and opens NC (pump stopped).
+- Check the coil voltage printed on the relay. A 5 V coil is powered from the 5V pin and a 3.3 V coil from 3V3.
+- Use the relay's COM and NC contacts, not NO. The relay is energized only when the pump is disabled or in back-off, and with the relay unpowered the contact is closed so the float can call for water.
 
 ## Initial dev setup
 
@@ -133,7 +129,7 @@ After the first USB flash you can update over Wi-Fi from the UI:
 Behaviour and safety:
 
 - The upload needs a signed-in user and runs over HTTPS. It is refused while the pump is running, so a call for water is not interrupted.
-- The restart drops the relay, so the pump is allowed to run while the device is down (see the NC wiring note). A back-off is not enforced during the restart.
+- The restart drops the relay, so the float loop is available while the device is down (see the NC wiring note). A back-off is not enforced during the restart.
 - Rollback: a new image must get a Wi-Fi address, start the web server and run for 30 s before it marks itself valid. If it does not, or it resets before then, the bootloader returns to the previous firmware. A new image that stays up but never gets online restarts itself after 5 minutes, which also rolls back.
 - Rollback needs `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` (set in `sdkconfig.defaults`; delete the generated `sdkconfig.esp32s3` once so it takes effect).
 - The version shown is `PROJECT_VER` from `platformio.ini`, plus the build date and time, so you can tell builds apart. Change `PROJECT_VER` to label releases.
@@ -159,24 +155,25 @@ Sign in on the login screen as `admin` / `admin`, then change the password right
 Dashboard (dark theme, phone friendly):
 
 - **Title bar:** the title on the left and a menu (hamburger) on the right.
-- **Status card:** two large icons, *Control* (Enabled, Disabled, Backoff) and *Pump* (Off, On, Fault), then an *Estimated capacity* gauge with ticks at the low and high levels. Pump shows Fault during a back-off, or when the drive alarm is active while armed. It is not shown as a fault while disabled, because the drive raises F26 whenever Aux is open. Tap the Control icon to disable (when Enabled), enable (when Disabled) or end the back-off (when Backoff, after a confirmation). Metrics follow: back-off length and retry time (during a back-off), the next back-off length, fault count, total run time, gallons this demand, the demand runtime, and the 30-day average against your target (shown under the gal/day value). "Gallons this demand" and "Demand runtime" count up while the pump runs and keep their last values after it stops, until the next pump start resets them. They are not saved across a reboot.
+- **Status card:** two large icons, *Control* (Enabled, Disabled, Backoff) and *Pump* (Off, On, Fault), then an *Estimated capacity* gauge with ticks at the low and high levels. Pump shows Fault during a back-off, or when the drive alarm is active while armed. Tap the Control icon to disable (when Enabled), enable (when Disabled) or end the back-off (when Backoff, after a confirmation). Metrics follow: back-off length and retry time (during a back-off), the next back-off length, fault count, total run time, gallons this demand, the demand runtime, and the 30-day average against your target (shown under the gal/day value). "Gallons this demand" and "Demand runtime" count up while the pump runs and keep their last values after it stops, until the next pump start resets them. They are not saved across a reboot.
 - **Capacity graph:** two lines on different scales. Estimated capacity (left scale, gal) and the 30-day average pump rate (right scale, gal/day), with a dashed line at your gal/day target. Gridlines and labelled axes show the scales and dates, and 7 / 30 / 90 day buttons change the range. The capacity line steps down to the low level at each call for water and back up to the high level at each clean stop. The average counts only days since the first recorded pumping, so it settles after the first month.
 - **Menu:**
-  - *Settings*: initial and maximum back-off (hours), restart check delay (seconds, minimum 35), pump rate (gal/min, default 5), target (gal/day, display only), low and high capacity levels (gal), change password, and firmware update.
+  - *Settings*: initial and maximum fault back-off (hours), maximum continuous run time (minutes, default 10; 0 disables), run-limit back-off (minutes, default 1440), restart check delay (seconds, minimum 35), pump rate (gal/min, default 5), target (gal/day, display only), low and high capacity levels (gal), change password, and firmware update.
   - *Event log*: the last 100 events, newest first, with a *Clear log* button. Each pump start logs *Pump on*, and every stop logs *Pump off* with the run time and gallons pumped, whatever the cause (clean stop, fault or disable).
-  - *Disable pump* / *Enable pump*: opens or closes Aux. A back-off in progress is kept while disabled.
+  - *Disable pump* / *Enable pump*: opens or closes the float gate. A back-off in progress is kept while disabled.
   - *Reset back-off*: returns to the initial duration and resumes immediately.
   - *End back-off now* (only during a back-off): resumes immediately but keeps the escalated duration.
   - *Sign out*.
 
 States:
 
-| State    | Aux    | Meaning                                              |
-| -------- | ------ | ---------------------------------------------------- |
-| Settling | closed | Aux just closed; alarm ignored until the delay passes or the pump starts running |
-| Armed    | closed | Normal. Any alarm triggers a fault and back-off      |
-| Backoff  | open   | Waiting until the retry time                         |
-| Disabled | open   | Manually disabled                                    |
+| State      | Float gate | Meaning                                                                                 |
+| ---------- | ---------- | --------------------------------------------------------------------------------------- |
+| Settling   | closed     | Float gate just closed; alarm ignored until the delay passes or the pump starts running |
+| Armed      | closed     | Normal. Any alarm triggers a fault and back-off                                         |
+| Backoff    | open       | Waiting until the retry time                                                            |
+| RunBackoff | open       | Maximum run time reached; waiting until the run-limit retry time                        |
+| Disabled   | open       | Manually disabled                                                                       |
 
 ## Architecture
 
@@ -197,7 +194,7 @@ test/             Unity tests for the controller
 
 Flash layout (16 MB): `nvs`, `otadata`, `phy_init`, and two 3 MB app slots `ota_0` and `ota_1`.
 
-Data flow: the control loop reads the Run and Alarm GPIOs every 100 ms, calls `App::tick`, which runs `Controller::tick`, and then sets the Aux GPIO from `Controller::auxClosed()`. HTTP handlers take the same mutex.
+Data flow: the control loop reads the Run and Alarm GPIOs every 100 ms, calls `App::tick`, which runs `Controller::tick`, and then sets the float-gate relay GPIO from `Controller::auxClosed()`. HTTP handlers take the same mutex.
 
 Controller details:
 
@@ -209,7 +206,8 @@ Controller details:
   - Both levels are settings; low must be below high and neither can exceed 2000. With nothing saved yet the estimate starts at the low level. Nothing lowers it while the pump is off, since outflow is not measured.
   - Capacity history: a sample is saved just before and just after each correction (so the graph shows a clean step), and every 10 minutes while the pump runs. Samples need the wall-clock time, so none are recorded before NTP syncs. The newest 256 are kept, written to flash about once a minute when there is something new.
 - The back-off end is stored as a wall-clock epoch time. If the clock is not yet set after a reboot (NTP not synced), the device stays in back-off until it is, so it fails safe.
-- Aux relay output is high (relay energized, pump stopped) from the first instructions of `app_main`. Before that, during the bootloader, the pin floats and the pump may be allowed to run briefly.
+- The run-limit back-off expiry is also persisted across reboot and waits for the wall clock if needed.
+- Float-gate relay output is low (the high-level-trigger relay is de-energized, NC closed, float signal passed) from the first instructions of `app_main`. Before that, during the bootloader, the pin floats and the float loop may be available briefly.
 
 Persistence (NVS, namespace `pump`): settings, controller state (`persist`), the capacity estimate (`capacity`), capacity history (`caphist`, the last 256 samples), event log (`events2`), 90 days of daily gallons (`days`), credentials (`cred`, salted SHA-256), and the TLS certificate and key. Structural changes are saved immediately and run-time counters about once a minute, to limit flash wear.
 
@@ -223,20 +221,20 @@ HTTP API (all `/api` routes require Basic auth):
 | GET     | `/api/log`      | Event log                                               |
 | DELETE  | `/api/log`      | Clear the event log                                     |
 | GET     | `/api/history`  | Daily gallons                                           |
-| GET     | `/api/capacity` | Capacity samples (`t`, `gal`), oldest first             |
+| GET     | `/api/capacity` | Capacity samples (`t`, `gal`), oldest first         |
 | POST    | `/api/password` | `{"password": "..."}`                                 |
-| POST    | `/api/firmware` | Raw `.bin` body; installs it and restarts               |
+| POST    | `/api/firmware` | Raw `.bin` body; installs it and restarts             |
 | GET     | `/*`            | Static UI files (public; the login page needs them)     |
 
 ## Bench test (drive disconnected)
 
 Wire the relay module (VCC to 5V, GND to GND, IN to GPIO 6, trigger jumper High) with a multimeter across COM and NC.
 
-1. **Boot state:** with the board unpowered the contact (COM-NC) is closed. After power-up the firmware energizes the relay (contact opens) and releases it once the settle begins, so it is closed again within a second or two. Unplugging the board closes it.
+1. **Boot state:** with the board unpowered the contact (COM-NC) is closed, so the float signal can pass. After power-up the high-level-trigger input is held low, so the relay remains de-energized and the contact stays closed. Unplugging the board also closes it.
 2. **Login:** sign in with `admin` / `admin`. A wrong password shows an error. Change the password and sign in again.
-3. **Run sense:** touch a jumper from GPIO 4 to GND. The Pump tile shows On and the log records *Pump on*. Remove it, and the log shows *Pump off* with the run time and gallons, and the dashboard keeps those numbers.
-4. **Fault and back-off:** touch GPIO 5 to GND. Within about a second the contact opens (relay energizes), Control shows Backoff, Pump shows Fault, and the log records a fault with a 48 h back-off. Use *End back-off now*, trigger again, and confirm the next back-off doubles (96 h, then 192 h). *Reset back-off* returns it to 48 h.
-5. **Early fault:** within 60 s of boot, start the pump (GPIO 4) and then raise the alarm (GPIO 5). The fault is reported straight away.
+3. **Run sense:** touch a jumper from GPIO 5 to GND. The Pump tile shows On and the log records *Pump on*. Remove it, and the log shows *Pump off* with the run time and gallons, and the dashboard keeps those numbers.
+4. **Fault and back-off:** touch GPIO 15 to GND. Within about a second the contact opens (relay energizes), Control shows Backoff, Pump shows Fault, and the log records a fault with a 48 h back-off. Use *End back-off now*, trigger again, and confirm the next back-off doubles (96 h, then 192 h). *Reset back-off* returns it to 48 h.
+5. **Early fault:** within 60 s of boot, start the pump (GPIO 5) and then raise the alarm (GPIO 15). The fault is reported straight away.
 6. **Manual control:** tap the Control icon or use the menu to disable and enable. The contact opens (relay energized) when disabled and closes when enabled.
 7. **Reboot persistence:** reset the board during a back-off. It should come back in Backoff with the countdown kept and the contact open.
 8. **Short back-off (optional):** set the initial back-off to 0.01 hours (36 s), trigger a fault, and confirm it ends by itself. Set it back to 48.
@@ -255,17 +253,17 @@ Wire the relay module (VCC to 5V, GND to GND, IN to GPIO 6, trigger jumper High)
 
 ## Troubleshooting
 
-| Symptom                                  | Check                                                                                |
-| ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| `Could not open COM3` on upload        | Use the CH340 port (`upload_port` in `platformio.ini`); close the serial monitor |
-| Wi-Fi setup says "wrong password?" or reason 15 | Wrong password, 5 GHz-only or WPA3-only network, or MAC filtering |
-| Wi-Fi setup says "network not found"     | Check the name (it is case sensitive) and that the network is 2.4 GHz |
-| No prompt appears in the monitor         | The prompt only appears when no network is saved. Hold the BOOT button for 2 s to open it |
-| No IP in the log                         | Wi-Fi not connected; see the disconnect reason in the log                            |
-| Blank page or 404                        | The UI is embedded at build time. Make sure `npm run build` succeeded (check the build output) and re-upload the firmware |
-| Firmware upload says "Not a firmware image for this device" | Upload `.pio/build/esp32s3/firmware.bin` from this project, not a bootloader or other `.bin` |
-| Firmware upload says the pump is running | Try again when the pump is idle |
-| Pump won't start after enabling          | Aux contact wiring, trigger jumper on High, drive set to "Fault with Low", and the settle delay (60 s) |
-| Rebuilds everything when only the port changed | Editing `platformio.ini` triggers a full rebuild; use `--upload-port` on the command line |
-| Browser warns about the certificate      | Expected for a self-signed cert; accept it once (see Limitations) |
-| `MissingPackageManifestError` on build | Delete the half-downloaded folder in `~/.platformio/packages` and rebuild          |
+| Symptom                                                     | Check                                                                                                                       |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `Could not open COM3` on upload                           | Use the CH340 port (`upload_port` in `platformio.ini`); close the serial monitor                                        |
+| Wi-Fi setup says "wrong password?" or reason 15             | Wrong password, 5 GHz-only or WPA3-only network, or MAC filtering                                                           |
+| Wi-Fi setup says "network not found"                        | Check the name (it is case sensitive) and that the network is 2.4 GHz                                                       |
+| No prompt appears in the monitor                            | The prompt only appears when no network is saved. Hold the BOOT button for 2 s to open it                                   |
+| No IP in the log                                            | Wi-Fi not connected; see the disconnect reason in the log                                                                   |
+| Blank page or 404                                           | The UI is embedded at build time. Make sure `npm run build` succeeded (check the build output) and re-upload the firmware |
+| Firmware upload says "Not a firmware image for this device" | Upload `.pio/build/esp32s3/firmware.bin` from this project, not a bootloader or other `.bin`                            |
+| Firmware upload says the pump is running                    | Try again when the pump is idle                                                                                             |
+| Pump won't start after enabling                             | Float-gate contact wiring, trigger jumper on High, and the settle delay (60 s)                                              |
+| Rebuilds everything when only the port changed              | Editing `platformio.ini` triggers a full rebuild; use `--upload-port` on the command line                               |
+| Browser warns about the certificate                         | Expected for a self-signed cert; accept it once (see Limitations)                                                           |
+| `MissingPackageManifestError` on build                    | Delete the half-downloaded folder in `~/.platformio/packages` and rebuild                                                 |

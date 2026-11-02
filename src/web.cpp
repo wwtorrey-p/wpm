@@ -82,6 +82,7 @@ static const char* stateName(pump::State s) {
     switch (s) {
         case pump::State::Disabled: return "disabled";
         case pump::State::Backoff: return "backoff";
+        case pump::State::RunBackoff: return "run_backoff";
         case pump::State::Settling: return "settling";
         default: return "armed";
     }
@@ -94,6 +95,8 @@ static const char* eventName(pump::EventType t) {
         case pump::EventType::RunEnd: return "run_end";
         case pump::EventType::Fault: return "fault";
         case pump::EventType::Recovery: return "recovery";
+        case pump::EventType::RunLimit: return "run_limit";
+        case pump::EventType::RunRecovery: return "run_recovery";
         case pump::EventType::Disabled: return "disabled";
         case pump::EventType::Enabled: return "enabled";
         default: return "reset";
@@ -112,6 +115,7 @@ static esp_err_t getStatus(httpd_req_t* req) {
     cJSON_AddBoolToObject(j, "alarm", st.alarm);
     cJSON_AddNumberToObject(j, "epoch", (double)g_app->epoch());
     cJSON_AddNumberToObject(j, "backoffEnd", (double)st.p.backoffEndEpoch);
+    cJSON_AddNumberToObject(j, "runBackoffEnd", (double)st.p.runBackoffEndEpoch);
     cJSON_AddNumberToObject(j, "curBackoffS", st.p.curBackoffS);
     cJSON_AddNumberToObject(j, "nextBackoffS", st.p.nextBackoffS);
     cJSON_AddNumberToObject(j, "faultCount", st.p.faultCount);
@@ -138,6 +142,8 @@ static cJSON* settingsJson(const pump::Settings& s) {
     cJSON_AddNumberToObject(j, "targetGalPerDay", s.targetGalPerDay);
     cJSON_AddNumberToObject(j, "lowLevelGal", s.lowLevelGal);
     cJSON_AddNumberToObject(j, "highLevelGal", s.highLevelGal);
+    cJSON_AddNumberToObject(j, "maxRunM", s.maxRunS / 60.0);
+    cJSON_AddNumberToObject(j, "runBackoffM", s.runBackoffS / 60.0);
     return j;
 }
 
@@ -164,12 +170,15 @@ static esp_err_t putSettings(httpd_req_t* req) {
     g_app->lock();
     pump::Settings s = g_app->controller().settings();
     double init = s.initialBackoffS / 3600.0, mx = s.maxBackoffS / 3600.0, grace = s.graceS, gpm = s.gpm,
-           tgt = s.targetGalPerDay, low = s.lowLevelGal, high = s.highLevelGal;
+           tgt = s.targetGalPerDay, low = s.lowLevelGal, high = s.highLevelGal,
+           maxRun = s.maxRunS / 60.0, runBackoff = s.runBackoffS / 60.0;
     bool ok = num(body.get(), "initialBackoffH", 0.01, 8760, init) && num(body.get(), "maxBackoffH", 0.01, 87600, mx) &&
               num(body.get(), "graceS", 35, 600, grace) && num(body.get(), "gpm", 0.1, 500, gpm) &&
               num(body.get(), "targetGalPerDay", 0, 100000, tgt) && mx >= init &&
               num(body.get(), "lowLevelGal", 0, pump::kMaxCapacityGal, low) &&
-              num(body.get(), "highLevelGal", 0, pump::kMaxCapacityGal, high) && low < high;
+              num(body.get(), "highLevelGal", 0, pump::kMaxCapacityGal, high) && low < high &&
+              num(body.get(), "maxRunM", 0, 1440, maxRun) &&
+              num(body.get(), "runBackoffM", 0.01, 87600, runBackoff);
     cJSON* resp = nullptr;
     if (ok) {
         s.initialBackoffS = (uint32_t)(init * 3600);
@@ -179,6 +188,8 @@ static esp_err_t putSettings(httpd_req_t* req) {
         s.targetGalPerDay = (float)tgt;
         s.lowLevelGal = (float)low;
         s.highLevelGal = (float)high;
+        s.maxRunS = (uint32_t)(maxRun * 60);
+        s.runBackoffS = (uint32_t)(runBackoff * 60);
         g_app->applySettings(s);
         resp = settingsJson(s);
     }

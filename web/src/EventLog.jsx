@@ -8,6 +8,8 @@ const LABELS = {
   run_end: 'Pump off',
   fault: 'Fault',
   recovery: 'Back-off ended',
+  run_limit: 'Maximum run time reached',
+  run_recovery: 'Run-limit back-off ended',
   disabled: 'Disabled',
   enabled: 'Enabled',
   reset: 'Back-off reset',
@@ -16,6 +18,7 @@ const LABELS = {
 function describe(e) {
   if (e.type === 'run_end') return `Pump off, ran ${fmtRuntime(e.arg)}, ${Math.round(e.gal)} gal`;
   if (e.type === 'fault') return `Fault, back-off ${fmtDuration(e.arg)}`;
+  if (e.type === 'run_limit') return `Maximum run time reached, back-off ${fmtDuration(e.arg)}`;
   return LABELS[e.type] || e.type;
 }
 

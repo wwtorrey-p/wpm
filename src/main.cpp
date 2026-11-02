@@ -14,9 +14,9 @@
 #include "wifi.h"
 
 // Free on ESP32-S3 N16R8 (avoids octal PSRAM 35-37, strapping and USB pins).
-constexpr gpio_num_t kPinRun = GPIO_NUM_4;    // drive Run relay contact to GND
-constexpr gpio_num_t kPinAlarm = GPIO_NUM_5;  // drive Alarm relay contact to GND
-constexpr gpio_num_t kPinAux = GPIO_NUM_6;    // relay module: high energizes the coil, opening the NC contact (pump stopped)
+constexpr gpio_num_t kPinRun = GPIO_NUM_5;    // drive Run relay contact to GND
+constexpr gpio_num_t kPinAlarm = GPIO_NUM_15; // drive Alarm relay contact to GND
+constexpr gpio_num_t kPinFloatGate = GPIO_NUM_6;  // high-level trigger: high energizes the coil and opens NC
 constexpr gpio_num_t kPinBoot = GPIO_NUM_0;   // BOOT button: hold to re-enter the Wi-Fi network
 constexpr int kPinLed = 48;                   // on-board WS2812
 constexpr int kBootHoldTicks = 20;            // 2 s at the 100 ms loop rate
@@ -51,13 +51,13 @@ static void checkOtaHealth() {
 }
 
 static void initGpio() {
-    // Energize the relay (pump stopped) until the controller decides.
+    // The high-level trigger module is de-energized with a low input, leaving NC closed.
     gpio_config_t out = {};
-    out.pin_bit_mask = 1ULL << kPinAux;
+    out.pin_bit_mask = 1ULL << kPinFloatGate;
     out.mode = GPIO_MODE_OUTPUT;
-    gpio_set_level(kPinAux, 1);
+    gpio_set_level(kPinFloatGate, 0);
     gpio_config(&out);
-    gpio_set_level(kPinAux, 1);
+    gpio_set_level(kPinFloatGate, 0);
 
     gpio_config_t in = {};
     in.pin_bit_mask = (1ULL << kPinRun) | (1ULL << kPinAlarm) | (1ULL << kPinBoot);
@@ -107,7 +107,8 @@ extern "C" void app_main() {
         app.lock();
         pump::Status st = app.controller().status();
         app.unlock();
-        gpio_set_level(kPinAux, st.auxClosed ? 0 : 1);
+        // auxClosed means pump allowed: de-energize the high-level trigger and keep NC closed.
+        gpio_set_level(kPinFloatGate, st.auxClosed ? 0 : 1);
 
         // Dim colours: red alarm, purple Wi-Fi setup, blue running, amber back-off, white disabled, green idle.
         if (st.alarm) ledSet(32, 0, 0);

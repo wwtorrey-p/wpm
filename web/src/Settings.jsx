@@ -53,6 +53,8 @@ export function Settings({ onSaved }) {
         {field('targetGalPerDay', 'Target (gal/day)')}
         {field('lowLevelGal', 'Low level: capacity when the pump starts (gal)')}
         {field('highLevelGal', 'High level: capacity when the pump stops cleanly (gal, max 2000)')}
+        {field('maxRunM', 'Maximum continuous pump run time (minutes, 0 disables)')}
+        {field('runBackoffM', 'Run-limit back-off (minutes)')}
         <div class="row"><button type="submit" class="primary">Save</button><span class="muted">{msg}</span></div>
       </form>
       <form onSubmit={changePassword} class="card">

@@ -4,8 +4,10 @@
 
 namespace pump {
 
-enum class State : uint8_t { Disabled, Backoff, Settling, Armed };
-enum class EventType : uint8_t { Boot, Demand, RunEnd, Fault, Recovery, Disabled, Enabled, Reset };
+enum class State : uint8_t { Disabled, Backoff, RunBackoff, Settling, Armed };
+enum class EventType : uint8_t {
+    Boot, Demand, RunEnd, Fault, Recovery, RunLimit, RunRecovery, Disabled, Enabled, Reset
+};
 
 struct Event {
     int64_t epoch;
@@ -26,6 +28,8 @@ struct Settings {
     float targetGalPerDay = 50.0f;
     float lowLevelGal = 1400.0f;   // capacity when a call for water starts
     float highLevelGal = 1700.0f;  // capacity when the pump stops without a fault
+    uint32_t maxRunS = 10 * 60;     // maximum continuous pump run time; 0 disables the limit
+    uint32_t runBackoffS = 24 * 3600; // delay after the maximum run time is reached
 };
 
 struct Persisted {
@@ -36,6 +40,8 @@ struct Persisted {
     uint32_t totalRunS = 0;
     uint8_t backoffActive = 0;
     uint8_t enabled = 1;
+    int64_t runBackoffEndEpoch = 0; // 0 while active means "time not known yet"
+    uint8_t runBackoffActive = 0;
 };
 
 struct Inputs {
@@ -92,8 +98,10 @@ private:
     void emit(EventType t, uint32_t arg, float gallons = 0);
     void enterSettling();
     void fault();
+    void runLimit();
     void cleanStop();
     void resumeAfterBackoff();
+    void resumeAfterRunBackoff();
 
     static constexpr uint32_t kRunDebounceMs = 500;
     static constexpr uint32_t kAlarmDebounceMs = 500;
@@ -112,6 +120,7 @@ private:
     bool runOn_ = false;
     bool stopPending_ = false;
     bool needAlarmClear_ = false;
+    bool runLimitTriggered_ = false;
     uint32_t stopAtMs_ = 0;
     uint32_t settleStartMs_ = 0;
     uint32_t lastMs_ = 0;

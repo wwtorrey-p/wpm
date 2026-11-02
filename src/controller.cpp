@@ -34,6 +34,9 @@ void Controller::begin(const Settings& s, const Persisted& p, uint32_t nowMs, in
     } else if (p_.backoffActive) {
         state_ = State::Backoff;
         auxClosed_ = false;
+    } else if (p_.runBackoffActive) {
+        state_ = State::RunBackoff;
+        auxClosed_ = false;
     } else {
         enterSettling();
     }
@@ -61,6 +64,16 @@ void Controller::fault() {
     emit(EventType::Fault, dur);
 }
 
+void Controller::runLimit() {
+    p_.runBackoffActive = 1;
+    p_.runBackoffEndEpoch = epoch_ > 0 ? epoch_ + s_.runBackoffS : 0;
+    state_ = State::RunBackoff;
+    auxClosed_ = false;
+    stopPending_ = false;
+    runLimitTriggered_ = true;
+    emit(EventType::RunLimit, s_.runBackoffS);
+}
+
 void Controller::cleanStop() {
     stopPending_ = false;
     capacity_ = s_.highLevelGal;  // a clean stop means the level reached its known high point
@@ -73,6 +86,13 @@ void Controller::resumeAfterBackoff() {
     p_.backoffActive = 0;
     p_.backoffEndEpoch = 0;
     p_.curBackoffS = 0;
+    dirty_ = true;
+    if (p_.enabled) enterSettling();
+}
+
+void Controller::resumeAfterRunBackoff() {
+    p_.runBackoffActive = 0;
+    p_.runBackoffEndEpoch = 0;
     dirty_ = true;
     if (p_.enabled) enterSettling();
 }
@@ -103,6 +123,7 @@ void Controller::tick(const Inputs& in) {
             }
         }
         stopPending_ = false;
+        runLimitTriggered_ = false;
         emit(EventType::Demand, 0);
     } else if (!run && runOn_) {
         runOn_ = false;
@@ -125,6 +146,16 @@ void Controller::tick(const Inputs& in) {
                 resumeAfterBackoff();
             }
             break;
+        case State::RunBackoff:
+            if (p_.runBackoffEndEpoch == 0 && epoch_ > 0) {
+                p_.runBackoffEndEpoch = epoch_ + s_.runBackoffS;
+                dirty_ = true;
+            }
+            if (p_.runBackoffEndEpoch != 0 && epoch_ >= p_.runBackoffEndEpoch) {
+                emit(EventType::RunRecovery, s_.runBackoffS);
+                resumeAfterRunBackoff();
+            }
+            break;
         case State::Settling:
             // Alarm stays asserted (F26) while Aux is open, so ignore it until the drive restarts.
             // A running pump proves the drive has restarted, so later alarms are real faults.
@@ -143,6 +174,9 @@ void Controller::tick(const Inputs& in) {
         if (needAlarmClear_ && !alarm) needAlarmClear_ = false;
         if (alarm && !needAlarmClear_) {
             fault();
+        } else if (!runLimitTriggered_ && s_.maxRunS > 0 &&
+                   cycleMs_ >= s_.maxRunS * 1000u) {
+            runLimit();
         } else if (stopPending_ && (now - stopAtMs_) >= kStopConfirmMs) {
             cleanStop();
         }
@@ -160,6 +194,8 @@ void Controller::setEnabled(bool enabled) {
         emit(EventType::Enabled, 0);
         if (p_.backoffActive) {
             state_ = State::Backoff;
+        } else if (p_.runBackoffActive) {
+            state_ = State::RunBackoff;
         } else {
             enterSettling();
         }
@@ -173,9 +209,13 @@ void Controller::resetBackoff() {
 }
 
 void Controller::endBackoffNow() {
-    if (!p_.backoffActive) return;
-    emit(EventType::Recovery, 0);
-    resumeAfterBackoff();
+    if (p_.backoffActive) {
+        emit(EventType::Recovery, 0);
+        resumeAfterBackoff();
+    } else if (p_.runBackoffActive) {
+        emit(EventType::RunRecovery, 0);
+        resumeAfterRunBackoff();
+    }
 }
 
 void Controller::setSettings(const Settings& s) {
