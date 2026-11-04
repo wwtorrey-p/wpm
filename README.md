@@ -148,9 +148,9 @@ The network name and password are entered over the serial port and stored in fla
 
 ## Using the app
 
-Open `https://<device-ip>/`. The IP is printed in the serial log when Wi-Fi connects and is also listed in your router. The certificate is self-signed, so the browser shows a warning. Accept it once (Advanced, then continue). Installing the certificate into Windows will not remove the warning yet, because it has no Subject Alternative Name (see Limitations).
+Open `https://<device-ip>/`. The IP is printed in the serial log when Wi-Fi connects and is also listed in your router. The certificate is self-signed, so the browser shows a warning. Accept it once (Advanced, then continue). To remove the warning, open Settings, then Certificate, enter the device's fixed IP (for example `192.168.1.63`) and choose "Create new certificate". The device restarts. Accept the warning once more, then download `/cert.crt` and install it. On Windows, run in an administrator shell `certutil -addstore -f Root water-pump-monitor.crt`, or double-click the file, choose Install Certificate, Local Machine, Trusted Root Certification Authorities. Restart the browser and use `https://<that-ip>/`. A new certificate has a new key, so reinstall it on each client, and recreate it if the IP changes.
 
-Sign in on the login screen as `admin` / `admin`, then change the password right away (the UI warns while the default is in use). Passwords must be at least 6 characters and not `admin`. The UI keeps the credentials for the browser tab only and sends them with each API request.
+Sign in on the login screen as `admin` / `admin`, then change the login right away (the UI warns while the default is in use). The username can be changed on the Settings page; passwords must be at least 6 characters and not `admin`. The login is also used for the Moen Flo cloud (see Limitations). The UI keeps the credentials for the browser tab only and sends them with each API request.
 
 Dashboard (dark theme, phone friendly):
 
@@ -222,7 +222,11 @@ HTTP API (all `/api` routes require Basic auth):
 | DELETE  | `/api/log`      | Clear the event log                                     |
 | GET     | `/api/history`  | Daily gallons                                           |
 | GET     | `/api/capacity` | Capacity samples (`t`, `gal`), oldest first         |
-| POST    | `/api/password` | `{"password": "..."}`                                 |
+| POST    | `/api/capacity/refresh` | Corrects the capacity estimate and history with Flo water use since the last reset or correction (once per hour at most) |
+| POST    | `/api/cert`     | `{"ip": "192.168.1.63"}` creates a certificate for that IP and restarts (409 while the pump runs) |
+| GET     | `/cert.crt`     | Public. Downloads the current certificate for installing on a client |
+| POST    | `/api/password` | `{"username": "...", "password": "..."}` (either one) |
+| GET     | `/api/flo/usage` | Moen Flo consumption: `?days=7&interval=1d`, or an explicit range `?start=<epoch>&end=<epoch>&interval=1h` (`end` defaults to now; `1h` up to 7 days, `1d`/`1m` up to 93) |
 | POST    | `/api/firmware` | Raw `.bin` body; installs it and restarts             |
 | GET     | `/*`            | Static UI files (public; the login page needs them)     |
 
@@ -243,12 +247,14 @@ Wire the relay module (VCC to 5V, GND to GND, IN to GPIO 6, trigger jumper High)
 
 - The drive does not report which fault occurred, so any alarm is treated the same.
 - Gallons are an estimate (run time x gal/min), not a measurement.
+- The refresh icon on the Level chart subtracts the water Flo measured from the level, from the last capacity reset (a call for water starting, or a clean stop) or the last correction, up to the last whole hour that ended at least 30 minutes ago. Each hour is applied once, partial hours at a reset are prorated, and at most one refresh per hour is allowed. Until the first reset after the update there is nothing to correct from, so it waits. Gaps longer than 7 days are caught up 7 days per refresh.
 - Daily buckets use UTC. The browser displays dates in local time.
 - Updates are over USB or Wi-Fi (see above). Images are not signed.
 - The Wi-Fi password is stored in the device's flash (NVS) in plain text. It is not in the firmware image or the repository, but anyone with physical access to the board could read it. Flash encryption is not enabled.
-- The self-signed certificate is generated once and kept in flash. Erasing flash makes a new one. It has no Subject Alternative Name, so browsers warn about a name mismatch even if you install it. Planned: add a SAN with an mDNS hostname.
+- The self-signed certificate is generated once and kept in flash. Erasing flash makes a new one. The first-boot certificate has no address, so create one for your IP in Settings to make it installable. It is valid for that IPv4 address only.
 - Static UI files are served without a login so the login page can load. All data is behind `/api`.
-- The default login is `admin` / `admin`. Change it on first use.
+- The default login is `admin` / `admin`. Change it on first use. The username can be changed too (1-64 printable characters, no `:`).
+- The same login is used for the Moen Flo cloud, so set it to your Flo email and password. The password is kept in flash in plain text (alongside its hash) so the device can sign in to Flo. Anyone with physical access to the board could read it; consider a separate Flo account with limited access. The Flo call is unavailable until the password has been changed from the default.
 - To factory-reset stored data: `& $pio run -e esp32s3 -t erase`, then upload again.
 
 ## Troubleshooting

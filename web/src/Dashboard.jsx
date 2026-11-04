@@ -69,13 +69,30 @@ export function Dashboard({ onSignOut }) {
   const [notice, setNotice] = useState('');
   const [st, err, setSt] = usePolling(() => api('/api/status'), 5000);
   const [hist] = usePolling(() => api('/api/history'), 60000);
-  const [capHist] = usePolling(() => api('/api/capacity'), 60000);
+  const [capHist, , setCapHist] = usePolling(() => api('/api/capacity'), 60000);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
   const [settings, setSettings] = useState(null);
   const target = settings ? settings.targetGalPerDay : 0;
 
   useEffect(() => { api('/api/settings').then(setSettings).catch(() => {}); }, []);
 
   const go = (v) => { setMenuOpen(false); setView(v); };
+  const refreshCapacity = async () => {
+    setRefreshing(true);
+    setRefreshMsg('');
+    try {
+      const r = await api('/api/capacity/refresh', 'POST');
+      if (r.applied) {
+        setRefreshMsg(`Subtracted ${r.usedGallons} gal of water use through ${fmtTime(r.appliedThrough)}.${r.more ? ' Refresh again in an hour to catch up.' : ''}`);
+        setCapHist(await api('/api/capacity'));
+        setSt(await api('/api/status'));
+      } else {
+        setRefreshMsg(r.message);
+      }
+    } catch (e) { setRefreshMsg(e.message); }
+    setRefreshing(false);
+  };
   const control = async (action) => {
     setMenuOpen(false);
     try { setSt(await api('/api/control', 'POST', { action })); setNotice(''); } catch (e) { setNotice(e.message); }
@@ -122,14 +139,14 @@ export function Dashboard({ onSignOut }) {
             <div class="scrim" onClick={() => setMenuOpen(false)} />
             <nav class="menu">
               <button onClick={() => go('settings')}>Settings</button>
-              <button onClick={() => go('log')}>Event log</button>
+              <button onClick={() => go('log')}>Event Log</button>
               {st && (st.enabled
-                ? <button onClick={() => control('disable')}>Disable pump</button>
-                : <button onClick={() => control('enable')}>Enable pump</button>)}
-              <button onClick={reset}>Reset back-off</button>
+                ? <button onClick={() => control('disable')}>Disable Pump</button>
+                : <button onClick={() => control('enable')}>Enable Pump</button>)}
+              <button onClick={reset}>Reset Fault Delay</button>
               {st && (st.state === 'backoff' || st.state === 'run_backoff') &&
-                <button onClick={() => control('skip')}>End back-off now</button>}
-              <button class="divider" onClick={onSignOut}>Sign out</button>
+                <button onClick={() => control('skip')}>End Fault Delay Now</button>}
+              <button class="divider" onClick={onSignOut}>Sign Out</button>
             </nav>
           </>
         )}
@@ -160,25 +177,25 @@ export function Dashboard({ onSignOut }) {
                 <div class="metrics">
                   {(st.state === 'backoff' || isRunBackoff) && (
                     <>
-                      <Metric label={isRunBackoff ? 'Run-limit back-off' : 'Back-off length'}
+                      <Metric label={isRunBackoff ? 'Run Limit Delay' : 'Fault Delay'}
                         value={isRunBackoff ? fmtDuration(settings ? settings.runBackoffM * 60 : 0) : fmtDuration(st.curBackoffS)} />
-                      <Metric label="Retry" value={waitEnd
-                        ? <>{fmtTime(waitEnd)}<span class="sub">in {fmtDuration(waitLeft)}</span></>
+                      <Metric label="Next Retry" value={waitEnd
+                        ? <>{fmtTime(waitEnd)}<span class="sub">({fmtDuration(waitLeft)})</span></>
                         : 'waiting for clock'} />
                     </>
                   )}
-                  <Metric label="Next back-off if fault" value={fmtDuration(st.nextBackoffS)} />
+                  <Metric label="Next Fault Delay" value={fmtDuration(st.nextBackoffS)} />
                   <Metric label="Faults" value={st.faultCount} />
-                  <Metric label="Total run time" value={fmtDuration(st.totalRunS)} />
-                  <Metric label="Gallons this demand" value={`${st.cycleGallons.toFixed(0)} gal`} />
-                  <Metric label="Demand runtime" value={fmtRuntime(st.cycleRunS)} />
-                  <Metric label="Average, last 30 days" value={<>{(last30 / 30).toFixed(1)} gal/day{target ? <span class="sub">(target {target})</span> : null}</>} />
+                  <Metric label="Total Run Time" value={fmtDuration(st.totalRunS)} />
+                  <Metric label="Pumped This Run" value={`${st.cycleGallons.toFixed(0)} gal`} />
+                  <Metric label="Run Time" value={fmtRuntime(st.cycleRunS)} />
+                  <Metric label="Average, Last 30 Days" value={<>{(last30 / 30).toFixed(1)} gal/day{target ? <span class="sub">(target {target})</span> : null}</>} />
                 </div>
               </section>
             )}
             {!st && !err && <p class="muted">Loading...</p>}
             <section class="card">
-              <h2>Level</h2>
+              <h2>Cistern Water Level</h2>
               <p class="muted small">Estimated water level and average pump rate</p>
               <CapacityChart
                 samples={capHist || []}
@@ -187,6 +204,9 @@ export function Dashboard({ onSignOut }) {
                 capacity={st ? st.capacityGal : 0}
                 max={st ? st.maxCapacityGal : 2000}
                 target={target}
+                onRefresh={refreshCapacity}
+                refreshing={refreshing}
+                message={refreshMsg}
               />
             </section>
           </>

@@ -1,7 +1,10 @@
 #include "app.h"
 
+#include <algorithm>
+#include <cstring>
 #include <ctime>
 
+#include "capcorrect.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
@@ -43,7 +46,8 @@ void App::init() {
     storage::load("events2", log_);
     storage::loadPrefix("caphist", cap_);
     storage::load("days", days_);
-    if (!storage::load("cred", cred_)) {
+    storage::load("flo", flo_);
+    if (!storage::loadPrefix("cred", cred_)) {
         makeCredentials(cred_, "admin", true);
         storage::save("cred", cred_);
     }
@@ -95,6 +99,9 @@ void App::tick(bool run, bool alarm) {
         const float after = ctl_.status().capacityGal;
         if (after != capBefore_) pushCapacity(epoch_, capBefore_);
         pushCapacity(epoch_, after);
+        // A reset makes the level known again, so everything before it no longer needs correcting.
+        flo_.anchor = epoch_;
+        storage::save("flo", flo_);
     }
     // While the pump runs the estimate climbs steadily, so sample it every 10 minutes.
     if (ctl_.status().running && epoch_ > 0 && epoch_ - lastCapEpoch_ >= 600) {
@@ -131,14 +138,109 @@ void App::clearLog() {
 bool App::checkPassword(const std::string& user, const std::string& pass) const {
     uint8_t h[32];
     hashPassword(cred_.salt, pass, h);
-    uint8_t diff = user == "admin" ? 0 : 1;
+    const std::string expected = username();
+    uint8_t diff = 0;
+    for (size_t i = 0; i < std::max(user.size(), expected.size()); i++) {
+        diff |= (i < user.size() ? user[i] : 0) ^ (i < expected.size() ? expected[i] : 0);
+    }
     for (int i = 0; i < 32; i++) diff |= h[i] ^ cred_.hash[i];
     return diff == 0;
 }
 
-bool App::setPassword(const std::string& pass) {
-    if (pass.size() < 6 || pass == "admin") return false;
-    makeCredentials(cred_, pass, false);
-    ESP_LOGI(TAG, "password changed");
-    return storage::save("cred", cred_);
+std::string App::username() const { return cred_.user[0] ? cred_.user : "admin"; }
+
+static bool validUser(const std::string& u) {
+    if (u.empty() || u.size() > kMaxUserLen) return false;
+    for (unsigned char c : u) {
+        if (c < 0x21 || c > 0x7e || c == ':') return false;  // ':' would break Basic auth parsing
+    }
+    return true;
+}
+
+bool App::setCredentials(const std::string& user, const std::string& pass) {
+    if (user.empty() && pass.empty()) return false;
+    if (!user.empty() && !validUser(user)) return false;
+    if (!pass.empty() && (pass.size() < 6 || pass.size() > kMaxPassLen || pass == "admin")) return false;
+    Credentials next = cred_;
+    if (!pass.empty()) {
+        makeCredentials(next, pass, false);
+        memset(next.pass, 0, sizeof next.pass);
+        memcpy(next.pass, pass.data(), pass.size());
+    }
+    if (!user.empty()) {
+        memset(next.user, 0, sizeof next.user);
+        memcpy(next.user, user.data(), user.size());
+    }
+    if (!storage::save("cred", next)) return false;
+    cred_ = next;
+    ESP_LOGI(TAG, "credentials changed");
+    return true;
+}
+
+bool App::floLogin(std::string& user, std::string& pass) const {
+    if (cred_.isDefault || !cred_.pass[0]) return false;
+    user = username();
+    pass = cred_.pass;
+    return true;
+}
+
+static int64_t floorHour(int64_t t) { return t - ((t % 3600) + 3600) % 3600; }
+
+FloPlanResult App::planFloRefresh(FloPlan& plan, int64_t& waitS) {
+    const int64_t now = epoch_;
+    if (now <= 0) return FloPlanResult::NoClock;
+    if (flo_.anchor <= 0) return FloPlanResult::NoAnchor;
+    plan = FloPlan{};
+    plan.start = flo_.anchor;
+    plan.end = floorHour(now - kFloLagS);
+    if (plan.end <= plan.start) return FloPlanResult::NothingNew;
+    if (plan.end - plan.start > kFloMaxSpanS) {
+        plan.end = floorHour(plan.start + kFloMaxSpanS);
+        plan.more = true;
+    }
+    const int64_t next = std::max(flo_.lastRefresh + kFloMinIntervalS, floRetryAt_);
+    if (now < next) {
+        waitS = next - now;
+        return FloPlanResult::TooSoon;
+    }
+    floRetryAt_ = now + kFloRetryAfterFailureS;
+    return FloPlanResult::Ready;
+}
+
+bool App::commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& samples, float& usedGal) {
+    if (flo_.anchor != plan.start) return false;
+
+    std::vector<capcorrect::Bucket> buckets;
+    for (const flo::Sample& s : samples) {
+        if (s.epoch > 0 && s.epoch < plan.end && s.epoch + 3600 > plan.start) {
+            buckets.push_back({s.epoch, 3600, static_cast<float>(s.gallons)});
+        }
+    }
+
+    std::vector<capcorrect::Point> pts;
+    pts.reserve(cap_.count + kCapSamples);
+    for (uint32_t i = 0; i < cap_.count; i++) {
+        const CapSample& s = cap_.samples[(cap_.head + kCapSamples - cap_.count + i) % kCapSamples];
+        pts.push_back({s.epoch, s.gallons});
+    }
+    usedGal = capcorrect::apply(pts, buckets, plan.start, plan.end);
+
+    const size_t keep = std::min<size_t>(pts.size(), kCapSamples);
+    cap_ = CapHistory{};
+    for (size_t i = 0; i < keep; i++) {
+        const capcorrect::Point& p = pts[pts.size() - keep + i];
+        cap_.samples[i] = CapSample{(uint32_t)p.t, p.gal};
+    }
+    cap_.count = keep;
+    cap_.head = keep % kCapSamples;
+    storage::save("caphist", cap_);
+    capDirty_ = false;
+
+    ctl_.adjustCapacity(-usedGal);
+    flo_.anchor = plan.end;
+    flo_.lastRefresh = epoch_;
+    storage::save("flo", flo_);
+    savePersisted();
+    ESP_LOGI(TAG, "flo correction applied: %.1f gal used through %lld", usedGal, (long long)plan.end);
+    return true;
 }

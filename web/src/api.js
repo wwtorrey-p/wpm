@@ -11,6 +11,12 @@ export function setCredentials(user, pass) {
   sessionStorage.setItem('auth', auth);
 }
 
+// Swaps the username in the stored login, keeping the password.
+export function setUsername(user) {
+  const raw = new TextDecoder().decode(Uint8Array.from(atob(auth), (c) => c.charCodeAt(0)));
+  setCredentials(user, raw.slice(raw.indexOf(':') + 1));
+}
+
 export function clearCredentials() {
   auth = null;
   sessionStorage.removeItem('auth');

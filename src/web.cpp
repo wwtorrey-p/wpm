@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "flo.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -125,6 +126,9 @@ static esp_err_t getStatus(httpd_req_t* req) {
     cJSON_AddNumberToObject(j, "capacityGal", st.capacityGal);
     cJSON_AddNumberToObject(j, "maxCapacityGal", pump::kMaxCapacityGal);
     cJSON_AddBoolToObject(j, "defaultPassword", g_app->defaultPassword());
+    cJSON_AddNumberToObject(j, "floAnchor", (double)g_app->floAnchor());
+    cJSON_AddStringToObject(j, "certIp", certIp().c_str());
+    cJSON_AddStringToObject(j, "username", g_app->username().c_str());
     g_app->unlock();
     const esp_app_desc_t* desc = esp_app_get_description();
     cJSON_AddStringToObject(j, "version", desc->version);
@@ -274,16 +278,207 @@ static esp_err_t getHistory(httpd_req_t* req) {
     return sendJson(req, arr);
 }
 
+static esp_err_t sendText(httpd_req_t* req, const char* status, const char* msg);
+static std::string g_floLocation;  // cached after the first lookup; cleared when the login changes
+
 static esp_err_t postPassword(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
     Json body = readBody(req);
     cJSON* p = body ? cJSON_GetObjectItem(body.get(), "password") : nullptr;
-    if (!cJSON_IsString(p)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "password required");
+    cJSON* u = body ? cJSON_GetObjectItem(body.get(), "username") : nullptr;
+    if ((p && !cJSON_IsString(p)) || (u && !cJSON_IsString(u)) || !(p || u)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "username or password required");
+    }
     g_app->lock();
-    bool ok = g_app->setPassword(p->valuestring);
+    bool ok = g_app->setCredentials(u ? u->valuestring : "", p ? p->valuestring : "");
     g_app->unlock();
-    if (!ok) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "min 6 chars, not 'admin'");
+    if (!ok) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                   "username: 1-64 printable chars, no ':'; password: 6-72 chars, not 'admin'");
+    }
+    g_floLocation.clear();
     return httpd_resp_send(req, "ok", HTTPD_RESP_USE_STRLEN);
+}
+
+// The TLS client needs more stack than the HTTP server task has, so the Flo call runs in its own task.
+struct FloJob {
+    std::string user, pass, location, err;
+    time_t start, end;
+    flo::Interval interval;
+    flo::Usage usage;
+    bool ok = false;
+    SemaphoreHandle_t done;
+};
+
+static void floTask(void* arg) {
+    auto* job = static_cast<FloJob*>(arg);
+    job->ok = flo::getUsage(job->user, job->pass, job->location, job->start, job->end, job->interval, job->usage,
+                            job->err);
+    xSemaphoreGive(job->done);
+    vTaskDelete(nullptr);
+}
+
+// Runs the job in its own task and waits for it. False only if the task could not be started.
+static bool runFloJob(FloJob& job) {
+    job.done = xSemaphoreCreateBinary();
+    if (!job.done) return false;
+    if (xTaskCreate(floTask, "flo", 12288, &job, 5, nullptr) != pdPASS) {
+        vSemaphoreDelete(job.done);
+        return false;
+    }
+    xSemaphoreTake(job.done, portMAX_DELAY);
+    vSemaphoreDelete(job.done);
+    return true;
+}
+
+// POST /api/capacity/refresh : corrects the capacity estimate with the water Flo measured since the last reset
+// or the last correction. Limited to once an hour.
+static esp_err_t postCapacityRefresh(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    std::unique_ptr<FloJob> job(new (std::nothrow) FloJob());
+    if (!job) return httpd_resp_send_500(req);
+
+    FloPlan plan;
+    int64_t waitS = 0;
+    g_app->lock();
+    bool haveLogin = g_app->floLogin(job->user, job->pass);
+    FloPlanResult r = haveLogin ? g_app->planFloRefresh(plan, waitS) : FloPlanResult::NothingNew;
+    g_app->unlock();
+    if (!haveLogin) {
+        return sendText(req, "409 Conflict", "Set a new password first; the Flo login is the same as this login");
+    }
+    auto skipped = [&](const char* msg) {
+        cJSON* j = cJSON_CreateObject();
+        cJSON_AddBoolToObject(j, "applied", false);
+        cJSON_AddStringToObject(j, "message", msg);
+        return sendJson(req, j);
+    };
+    switch (r) {
+        case FloPlanResult::NoClock: return sendText(req, "409 Conflict", "Clock not set yet");
+        case FloPlanResult::NoAnchor:
+            return skipped("Waiting for the next capacity reset before usage can be applied");
+        case FloPlanResult::NothingNew: return skipped("Nothing new to apply yet");
+        case FloPlanResult::TooSoon: {
+            char msg[64];
+            snprintf(msg, sizeof msg, "Refreshed recently; try again in %d min", (int)((waitS + 59) / 60));
+            return sendText(req, "429 Too Many Requests", msg);
+        }
+        case FloPlanResult::Ready: break;
+    }
+
+    job->location = g_floLocation;
+    // Start on the hour so the bucket that contains the reset is included.
+    job->start = (time_t)(plan.start - plan.start % 3600);
+    job->end = (time_t)plan.end;
+    job->interval = flo::Interval::Hourly;
+    if (!runFloJob(*job)) return httpd_resp_send_500(req);
+    if (!job->ok) {
+        ESP_LOGW(TAG, "flo refresh failed: %s", job->err.c_str());
+        return sendText(req, "502 Bad Gateway", job->err.c_str());
+    }
+    g_floLocation = job->location;
+
+    float used = 0;
+    g_app->lock();
+    bool done = g_app->commitFloRefresh(plan, job->usage.items, used);
+    float capacity = g_app->controller().status().capacityGal;
+    g_app->unlock();
+    if (!done) return skipped("The capacity was reset during the refresh; try again later");
+
+    cJSON* j = cJSON_CreateObject();
+    cJSON_AddBoolToObject(j, "applied", true);
+    cJSON_AddNumberToObject(j, "usedGallons", std::round(used * 10.0f) / 10.0);
+    cJSON_AddNumberToObject(j, "appliedThrough", (double)plan.end);
+    cJSON_AddBoolToObject(j, "more", plan.more);
+    cJSON_AddNumberToObject(j, "capacityGal", capacity);
+    return sendJson(req, j);
+}
+
+// GET /api/flo/usage?days=7&interval=1d : fetches consumption from the Flo cloud with the device login.
+static esp_err_t getFloUsage(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    int days = 7;
+    int64_t startQ = 0, endQ = 0;  // optional explicit range (epoch seconds); overrides days
+    flo::Interval interval = flo::Interval::Daily;
+    char query[96], val[16];
+    if (httpd_req_get_url_query_str(req, query, sizeof query) == ESP_OK) {
+        if (httpd_query_key_value(query, "days", val, sizeof val) == ESP_OK) days = atoi(val);
+        if (httpd_query_key_value(query, "start", val, sizeof val) == ESP_OK) startQ = atoll(val);
+        if (httpd_query_key_value(query, "end", val, sizeof val) == ESP_OK) endQ = atoll(val);
+        if (httpd_query_key_value(query, "interval", val, sizeof val) == ESP_OK) {
+            if (!strcmp(val, "1h")) interval = flo::Interval::Hourly;
+            else if (!strcmp(val, "1m")) interval = flo::Interval::Monthly;
+            else if (strcmp(val, "1d")) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "interval: 1h, 1d or 1m");
+        }
+    }
+    const int maxDays = interval == flo::Interval::Hourly ? 7 : 93;
+    if (!startQ && (days < 1 || days > maxDays)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "days out of range");
+    }
+
+    std::unique_ptr<FloJob> job(new (std::nothrow) FloJob());
+    if (!job) return httpd_resp_send_500(req);
+    g_app->lock();
+    bool haveLogin = g_app->floLogin(job->user, job->pass);
+    int64_t now = g_app->epoch();
+    g_app->unlock();
+    if (!haveLogin) {
+        return sendText(req, "409 Conflict", "Set a new password first; the Flo login is the same as this login");
+    }
+    if (now <= 0) return sendText(req, "409 Conflict", "Clock not set yet");
+
+    job->location = g_floLocation;
+    job->end = endQ ? (time_t)endQ : (time_t)now;
+    job->start = startQ ? (time_t)startQ : job->end - (time_t)days * 86400;
+    if (job->end > now) job->end = (time_t)now;
+    if (job->start >= job->end || job->end - job->start > (int64_t)maxDays * 86400) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid range");
+    }
+    job->interval = interval;
+    if (!runFloJob(*job)) return httpd_resp_send_500(req);
+
+    if (!job->ok) {
+        ESP_LOGW(TAG, "flo usage failed: %s", job->err.c_str());
+        return sendText(req, "502 Bad Gateway", job->err.c_str());
+    }
+    g_floLocation = job->location;
+    cJSON* j = cJSON_CreateObject();
+    cJSON_AddStringToObject(j, "locationId", job->location.c_str());
+    cJSON_AddNumberToObject(j, "totalGallons", job->usage.totalGallons);
+    cJSON* arr = cJSON_AddArrayToObject(j, "items");
+    for (const flo::Sample& s : job->usage.items) {
+        cJSON* o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "time", s.time.c_str());
+        cJSON_AddNumberToObject(o, "gallons", s.gallons);
+        cJSON_AddItemToArray(arr, o);
+    }
+    return sendJson(req, j);
+}
+
+// Public: the certificate is not secret, and it has to be fetchable before a client trusts the device.
+static esp_err_t getCertFile(httpd_req_t* req) {
+    httpd_resp_set_type(req, "application/x-x509-ca-cert");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"water-pump-monitor.crt\"");
+    return httpd_resp_send(req, g_cert.c_str(), HTTPD_RESP_USE_STRLEN);
+}
+
+// POST /api/cert {"ip": "192.168.1.63"} : makes a new certificate for that address and restarts to use it.
+static esp_err_t postCert(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    Json body = readBody(req);
+    cJSON* ip = body ? cJSON_GetObjectItem(body.get(), "ip") : nullptr;
+    if (!cJSON_IsString(ip)) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ip required");
+    g_app->lock();
+    bool busy = g_app->controller().status().running;
+    g_app->unlock();
+    if (busy) return sendText(req, "409 Conflict", "Pump is running; try again when it is idle");
+    if (!regenerateCert(ip->valuestring)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid IPv4 address or certificate failed");
+    }
+    sendText(req, "200 OK", "ok");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
 }
 
 static esp_err_t serveStatic(httpd_req_t* req) {
@@ -391,7 +586,7 @@ bool startWebServer(App& app) {
     cfg.servercert_len = g_cert.size() + 1;
     cfg.prvtkey_pem = (const uint8_t*)g_key.c_str();
     cfg.prvtkey_len = g_key.size() + 1;
-    cfg.httpd.max_uri_handlers = 16;
+    cfg.httpd.max_uri_handlers = 20;
     cfg.httpd.uri_match_fn = httpd_uri_match_wildcard;
     cfg.httpd.stack_size = 10240;
     cfg.httpd.recv_wait_timeout = 10;
@@ -409,7 +604,11 @@ bool startWebServer(App& app) {
         {"/api/history", HTTP_GET, getHistory, nullptr},
         {"/api/capacity", HTTP_GET, getCapacityHistory, nullptr},
         {"/api/password", HTTP_POST, postPassword, nullptr},
+        {"/api/flo/usage", HTTP_GET, getFloUsage, nullptr},
+        {"/api/capacity/refresh", HTTP_POST, postCapacityRefresh, nullptr},
         {"/api/firmware", HTTP_POST, postFirmware, nullptr},
+        {"/api/cert", HTTP_POST, postCert, nullptr},
+        {"/cert.crt", HTTP_GET, getCertFile, nullptr},
         {"/*", HTTP_GET, serveStatic, nullptr},  // must stay last
     };
     for (const auto& r : routes) httpd_register_uri_handler(server, &r);

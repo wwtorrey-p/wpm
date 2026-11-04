@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks';
+import { RefreshIcon } from './Icons.jsx';
 
 const DAY = 86400;
 const RANGES = [7, 30, 90];
@@ -26,7 +27,7 @@ function rollingAverage(byDay, firstDay, day) {
 const fmtTick = (v, max) => (max < 20 ? v.toFixed(1) : Math.round(v).toString());
 const fmtDate = (t) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-export function CapacityChart({ samples, history, now, capacity, max, target }) {
+export function CapacityChart({ samples, history, now, capacity, max, target, onRefresh, refreshing, message }) {
   const [days, setDays] = useState(30);
 
   const end = now || Math.floor(Date.now() / 1000);
@@ -62,6 +63,12 @@ export function CapacityChart({ samples, history, now, capacity, max, target }) 
   return (
     <div>
       <div class="chart-range" role="group" aria-label="Time range">
+        {onRefresh && (
+          <button type="button" class={`chart-refresh${refreshing ? ' spin' : ''}`} onClick={onRefresh}
+            disabled={refreshing} aria-label="Correct the level with measured water use" title="Correct the level with Flo water use">
+            <RefreshIcon size={18} />
+          </button>
+        )}
         {RANGES.map((r) => (
           <button key={r} type="button" class={r === days ? 'on' : ''} onClick={() => setDays(r)}>{r} d</button>
         ))}
@@ -98,6 +105,7 @@ export function CapacityChart({ samples, history, now, capacity, max, target }) 
         <span><i class="swatch rate" /> Average (gal/day)</span>
         {target > 0 && <span><i class="swatch target" /> Target (gal/day)</span>}
       </div>
+      {message && <p class="muted chart-note">{message}</p>}
       {samples.length === 0 && <p class="muted chart-note">Capacity history builds up as the pump runs.</p>}
     </div>
   );

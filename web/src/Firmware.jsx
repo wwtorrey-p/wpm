@@ -53,7 +53,7 @@ export function Firmware() {
 
   return (
     <section class="card">
-      <h2>Firmware update</h2>
+      <h2>Firmware Update</h2>
       {info && <p class="muted small">Running {info.version}, built {info.built}</p>}
       <label>
         Firmware file (.bin)

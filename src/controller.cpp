@@ -82,6 +82,11 @@ void Controller::cleanStop() {
     p_.nextBackoffS = s_.initialBackoffS;
 }
 
+void Controller::adjustCapacity(float delta) {
+    capacity_ = std::clamp(capacity_ + delta, 0.0f, kMaxCapacityGal);
+    dirty_ = true;
+}
+
 void Controller::resumeAfterBackoff() {
     p_.backoffActive = 0;
     p_.backoffEndEpoch = 0;

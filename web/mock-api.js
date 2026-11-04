@@ -3,6 +3,7 @@ const now = () => Math.floor(Date.now() / 1000);
 
 export function mockApi() {
   let password = 'admin';
+  let username = 'admin';
   const st = {
     state: 'armed', enabled: true, auxClosed: true, running: false, alarm: false,
     backoffEnd: 0, curBackoffS: 0, nextBackoffS: 48 * 3600, faultCount: 3,
@@ -56,10 +57,19 @@ export function mockApi() {
           };
           const isJson = (req.headers['content-type'] || '').includes('json');
           const json = isJson && body ? JSON.parse(body) : {};
-          const expected = `Basic ${Buffer.from(`admin:${password}`).toString('base64')}`;
+          const expected = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
           if (req.headers.authorization !== expected) return send({ error: 'unauthorized' }, 401);
+          if (req.url === '/cert') { st.certIp = json.ip; return send({}); }
           if (req.url === '/firmware') return send({ ok: true });
-          if (req.url === '/status') return send(full());
+          if (req.url.startsWith('/flo/usage')) {
+            const days = Number(new URL(req.url, 'http://x').searchParams.get('days') || 7);
+            const items = Array.from({ length: days }, (_, i) => ({
+              time: new Date(Date.now() - (days - i) * 86400000).toISOString(),
+              gallons: Math.round(Math.random() * 300) / 10,
+            }));
+            return send({ locationId: 'mock-location', totalGallons: items.reduce((a, b) => a + b.gallons, 0), items });
+          }
+          if (req.url === '/status') return send({ ...full(), username });
           if (req.url === '/settings') {
             if (req.method === 'PUT') settings = { ...settings, ...json };
             return send(settings);
@@ -74,10 +84,14 @@ export function mockApi() {
             return send(log);
           }
           if (req.url === '/history') return send(history);
+          if (req.url === '/capacity/refresh') return send({ applied: true, usedGallons: 42.5, appliedThrough: Math.floor(Date.now() / 1000) - 3600, more: false, capacityGal: 1480 });
           if (req.url === '/capacity') return send(capacity);
           if (req.url === '/password') {
-            password = json.password;
-            st.defaultPassword = false;
+            if (json.username) username = json.username;
+            if (json.password) {
+              password = json.password;
+              st.defaultPassword = false;
+            }
             res.end('ok');
             return;
           }

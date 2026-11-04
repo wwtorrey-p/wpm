@@ -83,6 +83,8 @@ public:
     bool takeDirty() { bool d = dirty_; dirty_ = false; return d; }
     // True once after the capacity estimate was snapped to the low or high level.
     bool takeCapacityStep() { bool s = capStep_; capStep_ = false; return s; }
+    // Applies a correction in gallons (negative for water used), keeping the estimate within 0..max.
+    void adjustCapacity(float delta);
 
     bool auxClosed() const { return auxClosed_; }
     Status status() const;

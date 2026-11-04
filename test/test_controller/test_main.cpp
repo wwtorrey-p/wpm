@@ -285,6 +285,50 @@ void test_fault_takes_precedence_over_run_limit() {
     TEST_ASSERT_FALSE(r.c.status().p.runBackoffActive);
 }
 
+void test_run_limit_stop_does_not_reset_capacity_to_high() {
+    Rig r(1555);
+    Settings s;
+    s.maxRunS = 60;
+    s.runBackoffS = 120;
+    r.c.setSettings(s);
+    r.advance(60);
+    r.run = true;
+    r.advance(65);  // limit reached: the drive is stopped by the run-limit back-off
+    TEST_ASSERT_EQUAL_INT(1, r.count(EventType::RunLimit));
+    r.run = false;
+    r.advance(10);  // well past the stop-confirm delay
+    float c = r.c.status().capacityGal;
+    TEST_ASSERT_TRUE(c > 1400.0f && c < 1420.0f);  // still the low level plus the run, not the high level
+
+    r.advance(120);  // back-off ends and the pump is re-armed
+    r.advance(65);
+    c = r.c.status().capacityGal;
+    TEST_ASSERT_TRUE(c > 1400.0f && c < 1420.0f);
+
+    // A later call for water that ends normally still snaps to the high level.
+    r.run = true;
+    r.advance(30);
+    r.run = false;
+    r.advance(5);
+    TEST_ASSERT_EQUAL_FLOAT(1700.0f, r.c.status().capacityGal);
+}
+
+void test_run_limit_stop_ended_early_by_skip_does_not_reset_capacity_to_high() {
+    Rig r(1555);
+    Settings s;
+    s.maxRunS = 60;
+    r.c.setSettings(s);
+    r.advance(60);
+    r.run = true;
+    r.advance(65);
+    r.run = false;
+    r.advance(10);
+    r.c.endBackoffNow();
+    r.advance(65);
+    float c = r.c.status().capacityGal;
+    TEST_ASSERT_TRUE(c > 1400.0f && c < 1420.0f);
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_fault_opens_aux_and_doubles);
@@ -305,5 +349,7 @@ int main() {
     RUN_TEST(test_last_run_numbers_stay_until_next_start);
     RUN_TEST(test_run_limit_starts_separate_backoff_and_recovers);
     RUN_TEST(test_fault_takes_precedence_over_run_limit);
+    RUN_TEST(test_run_limit_stop_does_not_reset_capacity_to_high);
+    RUN_TEST(test_run_limit_stop_ended_early_by_skip_does_not_reset_capacity_to_high);
     return UNITY_END();
 }
