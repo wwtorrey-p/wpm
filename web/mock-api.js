@@ -69,6 +69,20 @@ export function mockApi() {
             }));
             return send({ locationId: 'mock-location', totalGallons: items.reduce((a, b) => a + b.gallons, 0), items });
           }
+          if (req.url === '/network') {
+            return send({
+              connected: true, ip: '192.168.1.63', netmask: '255.255.255.0', gateway: '192.168.1.1', dns: '192.168.1.1',
+              hostname: 'espressif', mac: 'AA:BB:CC:DD:EE:FF', ssid: 'HomeWifi', rssi: -58, channel: 6,
+            });
+          }
+          if (req.url === '/system') {
+            return send({
+              uptimeS: 93784, resetReason: 'power on', chip: 'ESP32-S3', chipRevision: 2, cores: 2, cpuMHz: 240, tempC: 41.5,
+              heapFree: 182000, heapTotal: 330000, heapMinFree: 150000, heapLargestBlock: 110000, httpStackFree: 3400,
+              flashSize: 8388608, otaSlot: 'ota_0', otaSlotSize: 1966080, nvsUsed: 210, nvsTotal: 756,
+              version: '0.1.0', idfVersion: 'v5.4', wifiDisconnects: 2, wifiLastReason: 200,
+            });
+          }
           if (req.url === '/status') return send({ ...full(), username });
           if (req.url === '/settings') {
             if (req.method === 'PUT') settings = { ...settings, ...json };

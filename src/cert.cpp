@@ -64,9 +64,9 @@ static bool generate(std::string& certPem, std::string& keyPem, const unsigned c
         if (mbedtls_x509write_crt_set_serial_raw(&crt, serial, sizeof serial)) break;
         // Fixed window: the device clock is not trustworthy at first boot.
         if (mbedtls_x509write_crt_set_validity(&crt, "20240101000000", "20740101000000")) break;
-        if (mbedtls_x509write_crt_set_basic_constraints(&crt, 0, -1)) break;
+        if (mbedtls_x509write_crt_set_basic_constraints(&crt, 1, 0)) break;  // Android only installs CA:TRUE certs without a private key
         if (ip && mbedtls_x509write_crt_set_subject_alternative_name(&crt, &san)) break;
-        if (mbedtls_x509write_crt_set_key_usage(&crt, MBEDTLS_X509_KU_DIGITAL_SIGNATURE)) break;
+        if (mbedtls_x509write_crt_set_key_usage(&crt, MBEDTLS_X509_KU_DIGITAL_SIGNATURE | MBEDTLS_X509_KU_KEY_CERT_SIGN)) break;
         if (mbedtls_x509write_crt_set_ext_key_usage(&crt, &serverAuth)) break;
 
         if (mbedtls_x509write_crt_pem(&crt, certBuf.data(), certBuf.size(), mbedtls_ctr_drbg_random, &drbg)) break;

@@ -220,6 +220,8 @@ HTTP API (all `/api` routes require Basic auth):
 | POST    | `/api/control`  | `{"action": "enable" \| "disable" \| "reset" \| "skip"}` |
 | GET     | `/api/log`      | Event log                                               |
 | DELETE  | `/api/log`      | Clear the event log                                     |
+| GET     | `/api/network`  | Wi-Fi connection info: IP, netmask, gateway, DNS, hostname, MAC, SSID, signal, channel |
+| GET     | `/api/system`   | Hardware info: chip, temperature, uptime, reset reason, heap, flash, OTA slot, NVS use, Wi-Fi disconnects |
 | GET     | `/api/history`  | Daily gallons                                           |
 | GET     | `/api/capacity` | Capacity samples (`t`, `gal`), oldest first         |
 | POST    | `/api/capacity/refresh` | Corrects the capacity estimate and history with Flo water use since the last reset or correction (once per hour at most) |

@@ -6,6 +6,8 @@ import { usePolling } from './hooks.js';
 import {
   BackIcon, BackoffIcon, DisabledIcon, EnabledIcon, FaultIcon, MenuIcon, PumpOffIcon, PumpOnIcon,
 } from './Icons.jsx';
+import { Hardware } from './Hardware.jsx';
+import { Network } from './Network.jsx';
 import { Settings } from './Settings.jsx';
 
 const MODES = {
@@ -139,6 +141,8 @@ export function Dashboard({ onSignOut }) {
             <div class="scrim" onClick={() => setMenuOpen(false)} />
             <nav class="menu">
               <button onClick={() => go('settings')}>Settings</button>
+              <button onClick={() => go('network')}>Network</button>
+              <button onClick={() => go('hardware')}>Hardware</button>
               <button onClick={() => go('log')}>Event Log</button>
               {st && (st.enabled
                 ? <button onClick={() => control('disable')}>Disable Pump</button>
@@ -159,6 +163,8 @@ export function Dashboard({ onSignOut }) {
         )}
 
         {view === 'settings' && <Settings onSaved={setSettings} />}
+        {view === 'network' && <Network />}
+        {view === 'hardware' && <Hardware />}
         {view === 'log' && <EventLog />}
 
         {view === 'home' && (
