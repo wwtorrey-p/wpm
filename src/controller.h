@@ -30,6 +30,7 @@ struct Settings {
     float highLevelGal = 1700.0f;  // capacity when the pump stops without a fault
     uint32_t maxRunS = 10 * 60;     // maximum continuous pump run time; 0 disables the limit
     uint32_t runBackoffS = 24 * 3600; // delay after the maximum run time is reached
+    float waterAddGal = 210.0f;
 };
 
 struct Persisted {

@@ -130,6 +130,22 @@ void App::applySettings(const pump::Settings& s) {
     savePersisted();
 }
 
+float App::addWater() {
+    const float before = ctl_.status().capacityGal;
+    ctl_.adjustCapacity(ctl_.settings().waterAddGal);
+    const float after = ctl_.status().capacityGal;
+    if (after != before) {
+        pushCapacity(epoch_, before);
+        pushCapacity(epoch_, after);
+        if (capDirty_) {
+            storage::save("caphist", cap_);
+            capDirty_ = false;
+        }
+    }
+    savePersisted();
+    return after - before;
+}
+
 void App::clearLog() {
     log_ = EventLog{};
     storage::save("events2", log_);

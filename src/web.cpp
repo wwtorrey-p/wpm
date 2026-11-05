@@ -270,6 +270,7 @@ static cJSON* settingsJson(const pump::Settings& s) {
     cJSON_AddNumberToObject(j, "highLevelGal", s.highLevelGal);
     cJSON_AddNumberToObject(j, "maxRunM", s.maxRunS / 60.0);
     cJSON_AddNumberToObject(j, "runBackoffM", s.runBackoffS / 60.0);
+    cJSON_AddNumberToObject(j, "waterAddGal", s.waterAddGal);
     return j;
 }
 
@@ -297,14 +298,15 @@ static esp_err_t putSettings(httpd_req_t* req) {
     pump::Settings s = g_app->controller().settings();
     double init = s.initialBackoffS / 3600.0, mx = s.maxBackoffS / 3600.0, grace = s.graceS, gpm = s.gpm,
            tgt = s.targetGalPerDay, low = s.lowLevelGal, high = s.highLevelGal,
-           maxRun = s.maxRunS / 60.0, runBackoff = s.runBackoffS / 60.0;
+           maxRun = s.maxRunS / 60.0, runBackoff = s.runBackoffS / 60.0, waterAdd = s.waterAddGal;
     bool ok = num(body.get(), "initialBackoffH", 0.01, 8760, init) && num(body.get(), "maxBackoffH", 0.01, 87600, mx) &&
               num(body.get(), "graceS", 35, 600, grace) && num(body.get(), "gpm", 0.1, 500, gpm) &&
               num(body.get(), "targetGalPerDay", 0, 100000, tgt) && mx >= init &&
               num(body.get(), "lowLevelGal", 0, pump::kMaxCapacityGal, low) &&
               num(body.get(), "highLevelGal", 0, pump::kMaxCapacityGal, high) && low < high &&
               num(body.get(), "maxRunM", 0, 1440, maxRun) &&
-              num(body.get(), "runBackoffM", 0.01, 87600, runBackoff);
+              num(body.get(), "runBackoffM", 0.01, 87600, runBackoff) &&
+              num(body.get(), "waterAddGal", 1, pump::kMaxCapacityGal, waterAdd);
     cJSON* resp = nullptr;
     if (ok) {
         s.initialBackoffS = (uint32_t)(init * 3600);
@@ -316,6 +318,7 @@ static esp_err_t putSettings(httpd_req_t* req) {
         s.highLevelGal = (float)high;
         s.maxRunS = (uint32_t)(maxRun * 60);
         s.runBackoffS = (uint32_t)(runBackoff * 60);
+        s.waterAddGal = (float)waterAdd;
         g_app->applySettings(s);
         resp = settingsJson(s);
     }
@@ -341,6 +344,18 @@ static esp_err_t postControl(httpd_req_t* req) {
     g_app->unlock();
     if (!ok) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unknown action");
     return getStatus(req);
+}
+
+static esp_err_t postCapacityAdd(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    g_app->lock();
+    const float added = g_app->addWater();
+    const float capacity = g_app->controller().status().capacityGal;
+    g_app->unlock();
+    cJSON* j = cJSON_CreateObject();
+    cJSON_AddNumberToObject(j, "addedGallons", added);
+    cJSON_AddNumberToObject(j, "capacityGal", capacity);
+    return sendJson(req, j);
 }
 
 static esp_err_t getLog(httpd_req_t* req) {
@@ -727,6 +742,7 @@ bool startWebServer(App& app) {
         {"/api/log", HTTP_DELETE, deleteLog, nullptr},
         {"/api/history", HTTP_GET, getHistory, nullptr},
         {"/api/capacity", HTTP_GET, getCapacityHistory, nullptr},
+        {"/api/capacity/add", HTTP_POST, postCapacityAdd, nullptr},
         {"/api/password", HTTP_POST, postPassword, nullptr},
         {"/api/flo/usage", HTTP_GET, getFloUsage, nullptr},
         {"/api/capacity/refresh", HTTP_POST, postCapacityRefresh, nullptr},

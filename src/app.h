@@ -86,6 +86,7 @@ public:
     int64_t epoch() const { return epoch_; }
     bool defaultPassword() const { return cred_.isDefault; }
     void applySettings(const pump::Settings& s);
+    float addWater();
     void clearLog();
     bool checkPassword(const std::string& user, const std::string& pass) const;
     // Empty user or pass keeps the current value. Returns false if the new values are not acceptable.

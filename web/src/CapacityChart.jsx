@@ -28,7 +28,7 @@ const fmtTick = (v, max) => (max < 20 ? v.toFixed(1) : Math.round(v).toString())
 const fmtDate = (t) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
 export function CapacityChart({ samples, history, now, capacity, max, target, onRefresh, refreshing, message }) {
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(7);
 
   const end = now || Math.floor(Date.now() / 1000);
   const start = end - days * DAY;

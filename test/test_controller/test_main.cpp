@@ -219,6 +219,15 @@ void test_capacity_is_capped() {
     TEST_ASSERT_EQUAL_FLOAT(kMaxCapacityGal, r.c.status().capacityGal);
 }
 
+void test_adding_water_increases_capacity_and_respects_maximum() {
+    Rig r(1000.0f);
+    TEST_ASSERT_EQUAL_FLOAT(210.0f, Settings{}.waterAddGal);
+    r.c.adjustCapacity(Settings{}.waterAddGal);
+    TEST_ASSERT_EQUAL_FLOAT(1210.0f, r.c.status().capacityGal);
+    r.c.adjustCapacity(1000.0f);
+    TEST_ASSERT_EQUAL_FLOAT(kMaxCapacityGal, r.c.status().capacityGal);
+}
+
 void test_pump_off_event_records_runtime_and_gallons() {
     Rig r;
     r.advance(65);
@@ -345,6 +354,7 @@ int main() {
     RUN_TEST(test_capacity_not_reset_when_starting_while_settling);
     RUN_TEST(test_capacity_not_reset_by_fault);
     RUN_TEST(test_capacity_is_capped);
+    RUN_TEST(test_adding_water_increases_capacity_and_respects_maximum);
     RUN_TEST(test_pump_off_event_records_runtime_and_gallons);
     RUN_TEST(test_last_run_numbers_stay_until_next_start);
     RUN_TEST(test_run_limit_starts_separate_backoff_and_recovers);

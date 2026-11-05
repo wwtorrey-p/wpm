@@ -11,6 +11,7 @@ The well recovers only about 50 gal/day, but a single demand pumps roughly 600 g
 - When a back-off ends, the pump is allowed to run again.
 - The first time the pump stops with no fault, the back-off resets to the initial value.
 - The pump can also be disabled manually, and the back-off can be reset or ended early.
+- **Add Water** in the top-level menu increases the capacity estimate by a configurable amount (default 210 gal).
 - The device logs calls for water, faults, recoveries and run time, and estimates gallons pumped (run time x configured gal/min).
 
 The device is reachable over Wi-Fi only, using HTTPS with a login.

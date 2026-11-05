@@ -88,6 +88,7 @@ export function Settings({ onSaved }) {
         {field('targetGalPerDay', 'Target (gal/day)')}
         {field('lowLevelGal', 'Float low level (gal)')}
         {field('highLevelGal', 'Float high level (gal, max 2000)')}
+        {field('waterAddGal', 'Add water amount (gal)')}
         {field('maxRunM', 'Maximum run time (minutes, 0 disables)')}
         {field('runBackoffM', 'Run delay (minutes)')}
         <div class="row"><button type="submit" class="primary">Save</button><span class="muted">{msg}</span></div>

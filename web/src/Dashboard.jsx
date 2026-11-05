@@ -69,6 +69,7 @@ export function Dashboard({ onSignOut }) {
   const [view, setView] = useState('home');
   const [menuOpen, setMenuOpen] = useState(false);
   const [notice, setNotice] = useState('');
+  const [waterNotice, setWaterNotice] = useState('');
   const [st, err, setSt] = usePolling(() => api('/api/status'), 5000);
   const [hist] = usePolling(() => api('/api/history'), 60000);
   const [capHist, , setCapHist] = usePolling(() => api('/api/capacity'), 60000);
@@ -98,6 +99,26 @@ export function Dashboard({ onSignOut }) {
   const control = async (action) => {
     setMenuOpen(false);
     try { setSt(await api('/api/control', 'POST', { action })); setNotice(''); } catch (e) { setNotice(e.message); }
+  };
+  const addWater = async () => {
+    setMenuOpen(false);
+    let amount = settings && settings.waterAddGal;
+    if (amount == null) {
+      try {
+        const currentSettings = await api('/api/settings');
+        setSettings(currentSettings);
+        amount = currentSettings.waterAddGal;
+      } catch (e) { setWaterNotice(e.message); return; }
+    }
+    if (!confirm(`Add ${amount} gal of water to the estimated capacity?`)) return;
+    setWaterNotice('');
+    try {
+      const result = await api('/api/capacity/add', 'POST');
+      setWaterNotice(`Added ${result.addedGallons} gal; estimated capacity is now ${result.capacityGal} gal.`);
+      setSt((current) => current ? { ...current, capacityGal: result.capacityGal } : current);
+      try { setCapHist(await api('/api/capacity')); }
+      catch (e) { setWaterNotice(`Added ${result.addedGallons} gal; could not refresh capacity history: ${e.message}`); }
+    } catch (e) { setWaterNotice(e.message); }
   };
   const reset = () => {
     if (confirm('Reset the back-off and allow the pump to run now?')) control('reset');
@@ -140,6 +161,7 @@ export function Dashboard({ onSignOut }) {
           <>
             <div class="scrim" onClick={() => setMenuOpen(false)} />
             <nav class="menu">
+              <button onClick={addWater}>Add Water</button>
               <button onClick={() => go('settings')}>Settings</button>
               <button onClick={() => go('network')}>Network</button>
               <button onClick={() => go('hardware')}>Hardware</button>
@@ -158,6 +180,7 @@ export function Dashboard({ onSignOut }) {
 
       <main>
         {notice && <p class="banner error">{notice}</p>}
+        {waterNotice && <p class="banner">{waterNotice}</p>}
         {view !== 'home' && (
           <button class="back" onClick={() => setView('home')}><BackIcon size={20} /> Back</button>
         )}
