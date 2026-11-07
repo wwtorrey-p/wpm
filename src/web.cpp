@@ -112,8 +112,11 @@ static const char* eventName(pump::EventType t) {
         case pump::EventType::RunRecovery: return "run_recovery";
         case pump::EventType::Disabled: return "disabled";
         case pump::EventType::Enabled: return "enabled";
-        default: return "reset";
+        case pump::EventType::Reset: return "reset";
+        case pump::EventType::CapacityReset: return "capacity_reset";
+        case pump::EventType::WaterAdded: return "water_added";
     }
+    return "unknown";
 }
 
 static esp_err_t getStatus(httpd_req_t* req) {
@@ -370,6 +373,10 @@ static esp_err_t getLog(httpd_req_t* req) {
         cJSON_AddStringToObject(o, "type", eventName(e.type));
         cJSON_AddNumberToObject(o, "arg", e.arg);
         cJSON_AddNumberToObject(o, "gal", std::round(e.gallons * 10.0f) / 10.0);
+        if (e.type == pump::EventType::CapacityReset || e.type == pump::EventType::WaterAdded) {
+            cJSON_AddNumberToObject(o, "currentGal", e.arg / 10.0);
+            cJSON_AddNumberToObject(o, "newGal", std::round(e.gallons * 10.0f) / 10.0);
+        }
         cJSON_AddItemToArray(arr, o);
     }
     g_app->unlock();

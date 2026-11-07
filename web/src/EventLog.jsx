@@ -13,12 +13,16 @@ const LABELS = {
   disabled: 'Disabled',
   enabled: 'Enabled',
   reset: 'Back-off reset',
+  capacity_reset: 'Capacity reset',
+  water_added: 'Water added',
 };
 
 function describe(e) {
   if (e.type === 'run_end') return `Pump off, ran ${fmtRuntime(e.arg)}, ${Math.round(e.gal)} gal`;
   if (e.type === 'fault') return `Fault, back-off ${fmtDuration(e.arg)}`;
   if (e.type === 'run_limit') return `Maximum run time reached, back-off ${fmtDuration(e.arg)}`;
+  if (e.type === 'capacity_reset') return `Capacity reset, from ${Math.round(e.currentGal)} gal to ${Math.round(e.newGal)} gal`;
+  if (e.type === 'water_added') return `Water added, ${Math.round(e.newGal - e.currentGal)} gal (from ${Math.round(e.currentGal)} to ${Math.round(e.newGal)} gal)`;
   return LABELS[e.type] || e.type;
 }
 

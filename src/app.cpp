@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 
@@ -97,7 +98,11 @@ void App::tick(bool run, bool alarm) {
     // A correction is a step: record the level just before and just after it at the same time.
     if (ctl_.takeCapacityStep()) {
         const float after = ctl_.status().capacityGal;
-        if (after != capBefore_) pushCapacity(epoch_, capBefore_);
+        if (after != capBefore_) {
+            pushCapacity(epoch_, capBefore_);
+            onEvent(pump::Event{epoch_, pump::EventType::CapacityReset,
+                                static_cast<uint32_t>(std::lround(capBefore_ * 10.0f)), after});
+        }
         pushCapacity(epoch_, after);
         // A reset makes the level known again, so everything before it no longer needs correcting.
         flo_.anchor = epoch_;
@@ -137,6 +142,8 @@ float App::addWater() {
     if (after != before) {
         pushCapacity(epoch_, before);
         pushCapacity(epoch_, after);
+        onEvent(pump::Event{epoch_, pump::EventType::WaterAdded,
+                            static_cast<uint32_t>(std::lround(before * 10.0f)), after});
         if (capDirty_) {
             storage::save("caphist", cap_);
             capDirty_ = false;

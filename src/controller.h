@@ -6,14 +6,14 @@ namespace pump {
 
 enum class State : uint8_t { Disabled, Backoff, RunBackoff, Settling, Armed };
 enum class EventType : uint8_t {
-    Boot, Demand, RunEnd, Fault, Recovery, RunLimit, RunRecovery, Disabled, Enabled, Reset
+    Boot, Demand, RunEnd, Fault, Recovery, RunLimit, RunRecovery, Disabled, Enabled, Reset, CapacityReset, WaterAdded
 };
 
 struct Event {
     int64_t epoch;
     EventType type;
-    uint32_t arg;   // RunEnd: run seconds this demand; Fault/Recovery: back-off seconds
-    float gallons;  // RunEnd: gallons pumped this demand
+    uint32_t arg;   // RunEnd: run seconds; Fault/Recovery: back-off seconds; capacity events: previous capacity in 0.1 gal
+    float gallons;  // RunEnd: gallons pumped; capacity events: new capacity
 };
 
 // Upper limit of the capacity estimate, in gallons.
