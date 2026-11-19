@@ -1,7 +1,6 @@
 import { useState } from 'preact/hooks';
-import { RefreshIcon } from './Icons.jsx';
+import { DAY, productionAverage, productionHistory } from './production.js';
 
-const DAY = 86400;
 const RANGES = [7, 30, 90];
 const AVG_WINDOW_DAYS = 30;
 
@@ -15,19 +14,10 @@ function niceMax(v) {
   return steps.find((s) => s >= v) || Math.ceil(v / 1000) * 1000;
 }
 
-// Gallons per day averaged over up to AVG_WINDOW_DAYS ending on `day`, ignoring days before the first record.
-function rollingAverage(byDay, firstDay, day) {
-  const from = Math.max(firstDay, day - AVG_WINDOW_DAYS + 1);
-  if (day < from) return null;
-  let sum = 0;
-  for (let d = from; d <= day; d++) sum += byDay.get(d) || 0;
-  return sum / (day - from + 1);
-}
-
 const fmtTick = (v, max) => (max < 20 ? v.toFixed(1) : Math.round(v).toString());
 const fmtDate = (t) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-export function CapacityChart({ samples, history, now, capacity, max, target, onRefresh, refreshing, message }) {
+export function CapacityChart({ samples, history, now, capacity, max, target }) {
   const [days, setDays] = useState(7);
 
   const end = now || Math.floor(Date.now() / 1000);
@@ -46,12 +36,11 @@ export function CapacityChart({ samples, history, now, capacity, max, target, on
   const capPath = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${yCap(p.gal).toFixed(1)}`).join('');
 
   // Average pump rate: one point per day.
-  const byDay = new Map(history.map((h) => [h.day, h.gallons]));
-  const firstDay = history.length ? Math.min(...history.map((h) => h.day)) : Infinity;
+  const production = productionHistory(history);
   const rate = [];
-  for (let d = Math.floor(start / DAY); d <= Math.floor(end / DAY); d++) {
-    const avg = rollingAverage(byDay, firstDay, d);
-    if (avg != null) rate.push({ t: d * DAY + DAY / 2, avg });
+  for (let d = Math.floor(start / DAY) - 1; d < Math.floor(end / DAY); d++) {
+    const result = productionAverage(production, d, AVG_WINDOW_DAYS);
+    if (result) rate.push({ t: (d + 1) * DAY, avg: result.average });
   }
   const rateMax = niceMax(Math.max(target || 0, ...rate.map((r) => r.avg), 1));
   const yRate = (v) => T + PH - (Math.min(v, rateMax) / rateMax) * PH;
@@ -63,12 +52,6 @@ export function CapacityChart({ samples, history, now, capacity, max, target, on
   return (
     <div>
       <div class="chart-range" role="group" aria-label="Time range">
-        {onRefresh && (
-          <button type="button" class={`chart-refresh${refreshing ? ' spin' : ''}`} onClick={onRefresh}
-            disabled={refreshing} aria-label="Correct the level with measured water use" title="Correct the level with Flo water use">
-            <RefreshIcon size={18} />
-          </button>
-        )}
         {RANGES.map((r) => (
           <button key={r} type="button" class={r === days ? 'on' : ''} onClick={() => setDays(r)}>{r} d</button>
         ))}
@@ -102,10 +85,9 @@ export function CapacityChart({ samples, history, now, capacity, max, target, on
       </svg>
       <div class="legend">
         <span><i class="swatch cap" /> Level (gal)</span>
-        <span><i class="swatch rate" /> Average (gal/day)</span>
+        <span><i class="swatch rate" /> Well production, 30-day average (gal/day)</span>
         {target > 0 && <span><i class="swatch target" /> Target (gal/day)</span>}
       </div>
-      {message && <p class="muted chart-note">{message}</p>}
       {samples.length === 0 && <p class="muted chart-note">Capacity history builds up as the pump runs.</p>}
     </div>
   );

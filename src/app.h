@@ -49,10 +49,14 @@ struct FloState {
     int64_t lastRefresh;
 };
 
+struct LevelState {
+    float capacity;
+    CapHistory history;
+    FloState flo;
+};
+
 // Flo's hourly data lags a little, so only hours that ended at least this long ago are applied.
 constexpr int64_t kFloLagS = 1800;
-constexpr int64_t kFloMinIntervalS = 3600;
-constexpr int64_t kFloRetryAfterFailureS = 300;
 // Longest span fetched in one refresh (hourly data); a longer gap is caught up over several refreshes.
 constexpr int64_t kFloMaxSpanS = 7 * 86400;
 
@@ -61,7 +65,8 @@ struct FloPlan {
     bool more = false;  // the gap was longer than one refresh covers
 };
 
-enum class FloPlanResult { Ready, NoClock, NoAnchor, NothingNew, TooSoon };
+enum class FloPlanResult { Ready, NoClock, NoAnchor, NothingNew };
+enum class FloCommitResult { Applied, AnchorChanged, StorageError };
 
 struct EventLog {
     uint32_t head;  // next write slot
@@ -96,16 +101,17 @@ public:
     // or set by an older build before it was kept).
     bool floLogin(std::string& user, std::string& pass) const;
     int64_t floAnchor() const { return flo_.anchor; }
-    // Decides what range a Flo refresh would fetch. waitS is set for TooSoon. Ready also starts the retry timer.
-    FloPlanResult planFloRefresh(FloPlan& plan, int64_t& waitS);
-    // Applies fetched hourly usage to the live capacity and the history. Returns false, changing nothing, if a
-    // capacity reset happened while the data was being fetched. usedGal is the gallons subtracted.
-    bool commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& samples, float& usedGal);
+    int64_t floLastRefresh() const { return flo_.lastRefresh; }
+    const std::string& floStatus() const { return floStatus_; }
+    void setFloStatus(const std::string& status) { floStatus_ = status; }
+    FloPlanResult planFloRefresh(FloPlan& plan) const;
+    FloCommitResult commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& samples, float& usedGal);
 
 private:
     void onEvent(const pump::Event& e);
     void addRunTime(uint32_t seconds);
     void savePersisted();
+    bool saveLevel();
     void pushCapacity(int64_t epoch, float gallons);
 
     SemaphoreHandle_t mutex_ = xSemaphoreCreateMutex();
@@ -118,7 +124,7 @@ private:
     std::array<DayBucket, kHistoryDays> days_{};
     Credentials cred_{};
     FloState flo_{};
-    int64_t floRetryAt_ = 0;
+    std::string floStatus_ = "Waiting for automatic Flo update";
     int64_t epoch_ = 0;
     uint32_t tickCount_ = 0;
     bool historyDirty_ = false;

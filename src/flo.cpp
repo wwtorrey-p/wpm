@@ -1,6 +1,7 @@
 #include "flo.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <memory>
 
@@ -253,7 +254,17 @@ bool getUsage(const std::string& email, const std::string& password, std::string
         const cJSON* g = cJSON_GetObjectItemCaseSensitive(it, "gallonsConsumed");
         std::string when = str(it, "time");
         const int64_t epoch = parseIso(when);
-        out.items.push_back({std::move(when), epoch, cJSON_IsNumber(g) ? g->valuedouble : 0.0});
+        if (epoch <= 0 || !cJSON_IsNumber(g) || !std::isfinite(g->valuedouble) || g->valuedouble < 0) {
+            err = "consumption reply contains an invalid sample";
+            return false;
+        }
+        for (const Sample& prior : out.items) {
+            if (prior.epoch == epoch) {
+                err = "consumption reply contains duplicate samples";
+                return false;
+            }
+        }
+        out.items.push_back({std::move(when), epoch, g->valuedouble});
     }
     ESP_LOGI(TAG, "usage: %zu samples, %.1f gal", out.items.size(), out.totalGallons);
     return true;

@@ -142,6 +142,8 @@ static esp_err_t getStatus(httpd_req_t* req) {
     cJSON_AddNumberToObject(j, "maxCapacityGal", pump::kMaxCapacityGal);
     cJSON_AddBoolToObject(j, "defaultPassword", g_app->defaultPassword());
     cJSON_AddNumberToObject(j, "floAnchor", (double)g_app->floAnchor());
+    cJSON_AddNumberToObject(j, "floLastRefresh", (double)g_app->floLastRefresh());
+    cJSON_AddStringToObject(j, "floStatus", g_app->floStatus().c_str());
     cJSON_AddStringToObject(j, "certIp", certIp().c_str());
     cJSON_AddStringToObject(j, "username", g_app->username().c_str());
     g_app->unlock();
@@ -475,69 +477,6 @@ static bool runFloJob(FloJob& job) {
     return true;
 }
 
-// POST /api/capacity/refresh : corrects the capacity estimate with the water Flo measured since the last reset
-// or the last correction. Limited to once an hour.
-static esp_err_t postCapacityRefresh(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
-    std::unique_ptr<FloJob> job(new (std::nothrow) FloJob());
-    if (!job) return httpd_resp_send_500(req);
-
-    FloPlan plan;
-    int64_t waitS = 0;
-    g_app->lock();
-    bool haveLogin = g_app->floLogin(job->user, job->pass);
-    FloPlanResult r = haveLogin ? g_app->planFloRefresh(plan, waitS) : FloPlanResult::NothingNew;
-    g_app->unlock();
-    if (!haveLogin) {
-        return sendText(req, "409 Conflict", "Set a new password first; the Flo login is the same as this login");
-    }
-    auto skipped = [&](const char* msg) {
-        cJSON* j = cJSON_CreateObject();
-        cJSON_AddBoolToObject(j, "applied", false);
-        cJSON_AddStringToObject(j, "message", msg);
-        return sendJson(req, j);
-    };
-    switch (r) {
-        case FloPlanResult::NoClock: return sendText(req, "409 Conflict", "Clock not set yet");
-        case FloPlanResult::NoAnchor:
-            return skipped("Waiting for the next capacity reset before usage can be applied");
-        case FloPlanResult::NothingNew: return skipped("Nothing new to apply yet");
-        case FloPlanResult::TooSoon: {
-            char msg[64];
-            snprintf(msg, sizeof msg, "Refreshed recently; try again in %d min", (int)((waitS + 59) / 60));
-            return sendText(req, "429 Too Many Requests", msg);
-        }
-        case FloPlanResult::Ready: break;
-    }
-
-    job->location = g_floLocation;
-    // Start on the hour so the bucket that contains the reset is included.
-    job->start = (time_t)(plan.start - plan.start % 3600);
-    job->end = (time_t)plan.end;
-    job->interval = flo::Interval::Hourly;
-    if (!runFloJob(*job)) return httpd_resp_send_500(req);
-    if (!job->ok) {
-        ESP_LOGW(TAG, "flo refresh failed: %s", job->err.c_str());
-        return sendText(req, "502 Bad Gateway", job->err.c_str());
-    }
-    g_floLocation = job->location;
-
-    float used = 0;
-    g_app->lock();
-    bool done = g_app->commitFloRefresh(plan, job->usage.items, used);
-    float capacity = g_app->controller().status().capacityGal;
-    g_app->unlock();
-    if (!done) return skipped("The capacity was reset during the refresh; try again later");
-
-    cJSON* j = cJSON_CreateObject();
-    cJSON_AddBoolToObject(j, "applied", true);
-    cJSON_AddNumberToObject(j, "usedGallons", std::round(used * 10.0f) / 10.0);
-    cJSON_AddNumberToObject(j, "appliedThrough", (double)plan.end);
-    cJSON_AddBoolToObject(j, "more", plan.more);
-    cJSON_AddNumberToObject(j, "capacityGal", capacity);
-    return sendJson(req, j);
-}
-
 // GET /api/flo/usage?days=7&interval=1d : fetches consumption from the Flo cloud with the device login.
 static esp_err_t getFloUsage(httpd_req_t* req) {
     if (!authorized(req)) return ESP_OK;
@@ -752,7 +691,6 @@ bool startWebServer(App& app) {
         {"/api/capacity/add", HTTP_POST, postCapacityAdd, nullptr},
         {"/api/password", HTTP_POST, postPassword, nullptr},
         {"/api/flo/usage", HTTP_GET, getFloUsage, nullptr},
-        {"/api/capacity/refresh", HTTP_POST, postCapacityRefresh, nullptr},
         {"/api/firmware", HTTP_POST, postFirmware, nullptr},
         {"/api/cert", HTTP_POST, postCert, nullptr},
         {"/cert.crt", HTTP_GET, getCertFile, nullptr},

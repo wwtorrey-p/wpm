@@ -8,6 +8,7 @@ import {
 } from './Icons.jsx';
 import { Hardware } from './Hardware.jsx';
 import { Network } from './Network.jsx';
+import { DAY, productionAverage, productionHistory } from './production.js';
 import { Settings } from './Settings.jsx';
 
 const MODES = {
@@ -71,31 +72,14 @@ export function Dashboard({ onSignOut }) {
   const [notice, setNotice] = useState('');
   const [waterNotice, setWaterNotice] = useState('');
   const [st, err, setSt] = usePolling(() => api('/api/status'), 5000);
-  const [hist] = usePolling(() => api('/api/history'), 60000);
+  const [hist, histErr] = usePolling(() => api('/api/history'), 60000);
   const [capHist, , setCapHist] = usePolling(() => api('/api/capacity'), 60000);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState('');
   const [settings, setSettings] = useState(null);
   const target = settings ? settings.targetGalPerDay : 0;
 
   useEffect(() => { api('/api/settings').then(setSettings).catch(() => {}); }, []);
 
   const go = (v) => { setMenuOpen(false); setView(v); };
-  const refreshCapacity = async () => {
-    setRefreshing(true);
-    setRefreshMsg('');
-    try {
-      const r = await api('/api/capacity/refresh', 'POST');
-      if (r.applied) {
-        setRefreshMsg(`Subtracted ${r.usedGallons} gal of water use through ${fmtTime(r.appliedThrough)}.${r.more ? ' Refresh again in an hour to catch up.' : ''}`);
-        setCapHist(await api('/api/capacity'));
-        setSt(await api('/api/status'));
-      } else {
-        setRefreshMsg(r.message);
-      }
-    } catch (e) { setRefreshMsg(e.message); }
-    setRefreshing(false);
-  };
   const control = async (action) => {
     setMenuOpen(false);
     try { setSt(await api('/api/control', 'POST', { action })); setNotice(''); } catch (e) { setNotice(e.message); }
@@ -145,8 +129,14 @@ export function Dashboard({ onSignOut }) {
     : isRunBackoff ? 'limit'
       : st.state === 'backoff' || (st.state === 'armed' && st.alarm) ? 'fault' : st.running ? 'on' : 'off';
 
-  const today = Math.floor(Date.now() / 86400000);
-  const last30 = (hist || []).filter((h) => h.day > today - 30).reduce((a, h) => a + h.gallons, 0);
+  const today = st && st.epoch > 0 ? Math.floor(st.epoch / DAY) : null;
+  const production = productionHistory(hist || []);
+  const last7 = today != null && hist ? productionAverage(production, today - 1, 7) : null;
+  const last30 = today != null && hist ? productionAverage(production, today - 1, 30) : null;
+  const floStale = st && st.floLastRefresh && st.epoch - st.floLastRefresh > 2 * DAY;
+  const avgValue = (result, window) => result
+    ? <>{result.average.toFixed(1)} gal/day{result.days < window && <span class="sub">({result.days} days since first record)</span>}</>
+    : 'Unavailable';
   const waitEnd = isRunBackoff ? st.runBackoffEnd : st && st.backoffEnd;
   const waitLeft = st && (st.state === 'backoff' || isRunBackoff) && waitEnd ? Math.max(0, waitEnd - st.epoch) : 0;
 
@@ -218,14 +208,17 @@ export function Dashboard({ onSignOut }) {
                   <Metric label="Total Run Time" value={fmtDuration(st.totalRunS)} />
                   <Metric label="Pumped This Run" value={`${st.cycleGallons.toFixed(0)} gal`} />
                   <Metric label="Run Time" value={fmtRuntime(st.cycleRunS)} />
-                  <Metric label="Average, Last 30 Days" value={<>{(last30 / 30).toFixed(1)} gal/day{target ? <span class="sub">(target {target})</span> : null}</>} />
+                  <Metric label="Well Production Today (UTC)" value={today != null && hist ? `${(production.byDay.get(today) || 0).toFixed(1)} gal` : 'Unavailable'} />
+                  <Metric label="Well Production, 7 Completed Days" value={avgValue(last7, 7)} />
+                  <Metric label="Well Production, 30 Completed Days" value={<>{avgValue(last30, 30)}{target ? <span class="sub">(target {target} gal/day)</span> : null}</>} />
                 </div>
+                <p class="muted small">Estimated from pump runtime. Averages include days without pumping; older history may be incomplete. Days use UTC.</p>
+                {histErr && <p class="error">Well production history: {histErr}</p>}
               </section>
             )}
             {!st && !err && <p class="muted">Loading...</p>}
             <section class="card">
-              <h2>Cistern Water Level</h2>
-              <p class="muted small">Estimated water level and average pump rate</p>
+              <h2>Cistern Water Level and Well Production</h2>
               <CapacityChart
                 samples={capHist || []}
                 history={hist || []}
@@ -233,10 +226,11 @@ export function Dashboard({ onSignOut }) {
                 capacity={st ? st.capacityGal : 0}
                 max={st ? st.maxCapacityGal : 2000}
                 target={target}
-                onRefresh={refreshCapacity}
-                refreshing={refreshing}
-                message={refreshMsg}
               />
+              {st && <p style={{marginTop:'1rem'}} class={`${floStale || (st.floStatus && (st.floStatus.includes('failed') || st.floStatus.includes('waiting for Wi-Fi'))) ? 'error' : 'muted'} small`}>Flo: {st.floStatus || 'Automatic update status unavailable'}.
+                {' '}Last successful correction: {st.floLastRefresh ? fmtTime(st.floLastRefresh) : 'not yet'}.
+                {floStale && ' Flo correction is overdue.'}
+              </p>}
             </section>
           </>
         )}

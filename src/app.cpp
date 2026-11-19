@@ -40,14 +40,21 @@ void App::init() {
     pump::Persisted p;
     storage::loadPrefix("settings", s);
     storage::load("persist", p);
-    float capacity = -1.0f;
-    if (storage::load("capacity", capacity)) ctl_.restoreCapacity(capacity);
+    LevelState level{};
+    if (storage::load("level", level)) {
+        ctl_.restoreCapacity(level.capacity);
+        cap_ = level.history;
+        flo_ = level.flo;
+    } else {
+        float capacity = -1.0f;
+        if (storage::load("capacity", capacity)) ctl_.restoreCapacity(capacity);
+        storage::loadPrefix("caphist", cap_);
+        storage::load("flo", flo_);
+    }
     // The event record gained a field, so the log moved to a new key; drop the old one to free its flash.
     storage::erase("events");
     storage::load("events2", log_);
-    storage::loadPrefix("caphist", cap_);
     storage::load("days", days_);
-    storage::load("flo", flo_);
     if (!storage::loadPrefix("cred", cred_)) {
         makeCredentials(cred_, "admin", true);
         storage::save("cred", cred_);
@@ -75,9 +82,16 @@ void App::pushCapacity(int64_t epoch, float gallons) {
 
 void App::savePersisted() {
     const pump::Status st = ctl_.status();
-    storage::save("persist", st.p);
-    storage::save("capacity", st.capacityGal);
+    if (!storage::save("persist", st.p)) ESP_LOGE(TAG, "failed to save controller state");
+    saveLevel();
     ctl_.takeDirty();
+}
+
+bool App::saveLevel() {
+    LevelState level{ctl_.status().capacityGal, cap_, flo_};
+    if (storage::save("level", level)) return true;
+    ESP_LOGE(TAG, "failed to save capacity, history and Flo checkpoint");
+    return false;
 }
 
 void App::addRunTime(uint32_t seconds) {
@@ -106,7 +120,7 @@ void App::tick(bool run, bool alarm) {
         pushCapacity(epoch_, after);
         // A reset makes the level known again, so everything before it no longer needs correcting.
         flo_.anchor = epoch_;
-        storage::save("flo", flo_);
+        saveLevel();
     }
     // While the pump runs the estimate climbs steadily, so sample it every 10 minutes.
     if (ctl_.status().running && epoch_ > 0 && epoch_ - lastCapEpoch_ >= 600) {
@@ -123,8 +137,7 @@ void App::tick(bool run, bool alarm) {
         historyDirty_ = false;
     }
     if (tickCount_ % 600 == 0 && capDirty_) {
-        storage::save("caphist", cap_);
-        capDirty_ = false;
+        if (saveLevel()) capDirty_ = false;
     }
     unlock();
 }
@@ -145,8 +158,7 @@ float App::addWater() {
         onEvent(pump::Event{epoch_, pump::EventType::WaterAdded,
                             static_cast<uint32_t>(std::lround(before * 10.0f)), after});
         if (capDirty_) {
-            storage::save("caphist", cap_);
-            capDirty_ = false;
+            if (saveLevel()) capDirty_ = false;
         }
     }
     savePersisted();
@@ -209,7 +221,7 @@ bool App::floLogin(std::string& user, std::string& pass) const {
 
 static int64_t floorHour(int64_t t) { return t - ((t % 3600) + 3600) % 3600; }
 
-FloPlanResult App::planFloRefresh(FloPlan& plan, int64_t& waitS) {
+FloPlanResult App::planFloRefresh(FloPlan& plan) const {
     const int64_t now = epoch_;
     if (now <= 0) return FloPlanResult::NoClock;
     if (flo_.anchor <= 0) return FloPlanResult::NoAnchor;
@@ -221,17 +233,11 @@ FloPlanResult App::planFloRefresh(FloPlan& plan, int64_t& waitS) {
         plan.end = floorHour(plan.start + kFloMaxSpanS);
         plan.more = true;
     }
-    const int64_t next = std::max(flo_.lastRefresh + kFloMinIntervalS, floRetryAt_);
-    if (now < next) {
-        waitS = next - now;
-        return FloPlanResult::TooSoon;
-    }
-    floRetryAt_ = now + kFloRetryAfterFailureS;
     return FloPlanResult::Ready;
 }
 
-bool App::commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& samples, float& usedGal) {
-    if (flo_.anchor != plan.start) return false;
+FloCommitResult App::commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& samples, float& usedGal) {
+    if (flo_.anchor != plan.start) return FloCommitResult::AnchorChanged;
 
     std::vector<capcorrect::Bucket> buckets;
     for (const flo::Sample& s : samples) {
@@ -249,21 +255,24 @@ bool App::commitFloRefresh(const FloPlan& plan, const std::vector<flo::Sample>& 
     usedGal = capcorrect::apply(pts, buckets, plan.start, plan.end);
 
     const size_t keep = std::min<size_t>(pts.size(), kCapSamples);
-    cap_ = CapHistory{};
+    CapHistory corrected{};
     for (size_t i = 0; i < keep; i++) {
         const capcorrect::Point& p = pts[pts.size() - keep + i];
-        cap_.samples[i] = CapSample{(uint32_t)p.t, p.gal};
+        corrected.samples[i] = CapSample{(uint32_t)p.t, p.gal};
     }
-    cap_.count = keep;
-    cap_.head = keep % kCapSamples;
-    storage::save("caphist", cap_);
+    corrected.count = keep;
+    corrected.head = keep % kCapSamples;
+    FloState nextFlo{plan.end, epoch_};
+    float nextCapacity = std::max(0.0f, ctl_.status().capacityGal - usedGal);
+    LevelState level{nextCapacity, corrected, nextFlo};
+    if (!storage::save("level", level)) {
+        ESP_LOGE(TAG, "failed to save Flo correction");
+        return FloCommitResult::StorageError;
+    }
+    cap_ = corrected;
     capDirty_ = false;
-
     ctl_.adjustCapacity(-usedGal);
-    flo_.anchor = plan.end;
-    flo_.lastRefresh = epoch_;
-    storage::save("flo", flo_);
-    savePersisted();
+    flo_ = nextFlo;
     ESP_LOGI(TAG, "flo correction applied: %.1f gal used through %lld", usedGal, (long long)plan.end);
-    return true;
+    return FloCommitResult::Applied;
 }

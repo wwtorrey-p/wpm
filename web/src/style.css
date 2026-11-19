@@ -196,6 +196,14 @@ button.tile.clickable:active { transform: scale(.98); }
 .chart-note { margin: .75rem 0 0; font-size: .85rem; }
 
 /* Forms */
+.settings-group {
+  min-width: 0;
+  margin: 0 0 1rem;
+  padding: .75rem 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.settings-group legend { padding: 0 .35rem; font-weight: 600; }
 label { display: block; margin-bottom: 1rem; color: var(--muted); font-size: .9rem; }
 input {
   display: block;

@@ -23,10 +23,10 @@ try:
         run("npm install")
     run("npm run build")
 except (subprocess.CalledProcessError, OSError) as err:
-    if os.path.exists(index):
+    if os.path.exists(index) and os.environ.get("WPM_STRICT_WEB_BUILD") != "1":
         print("WARNING: web UI build failed (%s); embedding the existing data/ files" % err)
     else:
-        print("ERROR: web UI build failed and data/index.html does not exist: %s" % err)
+        print("ERROR: web UI build failed; cannot use existing assets: %s" % err)
         env.Exit(1)  # noqa: F821
 
 # Served paths, MIME types and the data/ file behind each. The UI is compiled in as plain C++ arrays

@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "flo_auto.h"
 #include "led.h"
 #include "nvs_flash.h"
 #include "web.h"
@@ -86,6 +87,7 @@ extern "C" void app_main() {
 
     ledInit(kPinLed);
     app.init();
+    startFloAuto(app);
     g_webOk = startWebServer(app);
     if (!g_webOk) ESP_LOGE(TAG, "web server failed to start");
 

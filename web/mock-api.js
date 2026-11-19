@@ -9,6 +9,7 @@ export function mockApi() {
     backoffEnd: 0, curBackoffS: 0, nextBackoffS: 48 * 3600, faultCount: 3,
     totalRunS: 5 * 3600, cycleGallons: 120, cycleRunS: 1440, defaultPassword: true,
     version: '0.1.0', built: 'Oct 19 2026 09:00:00', capacityGal: 1520, maxCapacityGal: 2000,
+    floStatus: 'Flo update scheduled daily', floLastRefresh: now() - 3600,
   };
   let settings = {
     initialBackoffH: 48, maxBackoffH: 720, graceS: 60, gpm: 5, targetGalPerDay: 50, lowLevelGal: 1400, highLevelGal: 1700,
@@ -98,7 +99,6 @@ export function mockApi() {
             return send(log);
           }
           if (req.url === '/history') return send(history);
-          if (req.url === '/capacity/refresh') return send({ applied: true, usedGallons: 42.5, appliedThrough: Math.floor(Date.now() / 1000) - 3600, more: false, capacityGal: 1480 });
           if (req.url === '/capacity') return send(capacity);
           if (req.url === '/password') {
             if (json.username) username = json.username;

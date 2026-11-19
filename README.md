@@ -90,6 +90,30 @@ In a terminal (`$pio` is the path to `pio.exe`, normally `$env:USERPROFILE\.plat
 
 There is no separate filesystem upload: the web UI is embedded in the firmware image, so one image carries everything. `tools/build_web.py` runs `npm install` (first time only) and `npm run build` before each firmware build, then writes the built files into `src/generated/web_assets.cpp` (git-ignored) as plain C++ arrays, so Node.js must be on the PATH of the terminal that runs PlatformIO. If the UI build fails and `data/` already exists, the build continues with the existing files.
 
+### PowerShell build and release checks
+
+Run `.\build.ps1` from PowerShell, or provide one or more tasks:
+
+```powershell
+.\build.ps1 -Task Build                # ESP32-S3 firmware and embedded UI (default)
+.\build.ps1 -Task Web,Test             # UI build and native unit tests
+.\build.ps1 -Task Security             # audit, static analysis, secrets, configuration
+.\build.ps1 -Task Release              # firmware, tests, and all security checks
+.\build.ps1 -Task Release -RequireHardenedConfig
+```
+
+If Windows PowerShell blocks script execution, use PowerShell 7 (`pwsh`) or follow your organization's approved execution-policy setup.
+
+Individual security tasks are `Audit`, `Analyze`, `Secrets`, and `Config`. The script runs selected tasks in a fixed order, reports each result, and exits nonzero if any task fails or a required tool is missing. It does not upload or flash the board. Firmware builds through the script fail if the web build fails rather than falling back to existing assets. Run `npm ci` in `web/` beforehand if a clean installation matching the lockfile is required; the script does not reset existing dependencies.
+
+PlatformIO must be on PATH or installed at `%USERPROFILE%\.platformio\penv\Scripts\pio.exe`; Node.js/npm is needed for firmware and web builds and the audit. Native tests need a host C++ compiler. `Analyze` runs PlatformIO's configured static analyzer and fails on medium or high findings; PlatformIO may need to download the analyzer. `Audit` runs `npm audit --audit-level=moderate`, including development dependencies, and sends dependency information to the configured npm registry. It covers the web package lockfile, not ESP-IDF or PlatformIO packages. Review firmware platform and component versions against Espressif advisories separately.
+
+If PlatformIO reports that Cppcheck failed without details, rerun `pio check -e esp32s3 --fail-on-defect medium -v`. With the current toolchain, Cppcheck can report syntax errors in the ESP toolchain's C++ headers; an analyzer failure is not a clean scan.
+
+Install Gitleaks and put it on PATH for `Secrets`. It scans all local Git refs and the working directory, including ignored files such as dependencies and build outputs; findings are redacted in its output. It does not scan remote refs that have not been fetched. Consider the scan scope and runtime before using it on a populated build tree.
+
+`Config` checks the generated `sdkconfig.esp32s3` for Secure Boot and flash encryption. It warns if either is disabled or absent; `-RequireHardenedConfig` makes those warnings fail the task. The config must already exist when running `Config` or `Security` alone; `Release` builds first. This is not a device security certification: verify the actual device eFuses, provisioning, TLS, authentication, OTA update protections, and deployment requirements separately. Do not enable Secure Boot or flash encryption without following Espressif's provisioning and recovery guidance.
+
 Settings, counters and the event log live in the NVS partition, so flashing does not erase them.
 
 **First flash after moving to the OTA layout.** The partition table now has two app slots (`ota_0`, `ota_1`) plus `otadata`, replacing the old `factory` and `spiffs` partitions. Flash it once over USB with `upload`. The NVS partition keeps the same address, so stored settings survive. To turn on rollback, delete the generated `sdkconfig.esp32s3` once before that build so the new default in `sdkconfig.defaults` is picked up.
@@ -156,8 +180,8 @@ Sign in on the login screen as `admin` / `admin`, then change the login right aw
 Dashboard (dark theme, phone friendly):
 
 - **Title bar:** the title on the left and a menu (hamburger) on the right.
-- **Status card:** two large icons, *Control* (Enabled, Disabled, Backoff) and *Pump* (Off, On, Fault), then an *Estimated capacity* gauge with ticks at the low and high levels. Pump shows Fault during a back-off, or when the drive alarm is active while armed. Tap the Control icon to disable (when Enabled), enable (when Disabled) or end the back-off (when Backoff, after a confirmation). Metrics follow: back-off length and retry time (during a back-off), the next back-off length, fault count, total run time, gallons this demand, the demand runtime, and the 30-day average against your target (shown under the gal/day value). "Gallons this demand" and "Demand runtime" count up while the pump runs and keep their last values after it stops, until the next pump start resets them. They are not saved across a reboot.
-- **Capacity graph:** two lines on different scales. Estimated capacity (left scale, gal) and the 30-day average pump rate (right scale, gal/day), with a dashed line at your gal/day target. Gridlines and labelled axes show the scales and dates, and 7 / 30 / 90 day buttons change the range. The capacity line steps down to the low level at each call for water and back up to the high level at each clean stop. The average counts only days since the first recorded pumping, so it settles after the first month.
+- **Status card:** two large icons, *Control* (Enabled, Disabled, Backoff) and *Pump* (Off, On, Fault), then an *Estimated capacity* gauge with ticks at the low and high levels. Pump shows Fault during a back-off, or when the drive alarm is active while armed. Tap the Control icon to disable (when Enabled), enable (when Disabled) or end the back-off (when Backoff, after a confirmation). Metrics include the estimated well production today and its 7- and 30-day averages against the target. "Gallons this demand" and "Demand runtime" count up while the pump runs and keep their last values after it stops, until the next pump start resets them. They are not saved across a reboot.
+- **Capacity graph:** estimated capacity (left scale, gal) and the 30-day average well production (right scale, gal/day), with a dashed target. The 7 / 30 / 90 day buttons change the displayed range, not the averaging window. Averages cover completed UTC days, including days with no recorded pumping, and exclude today; today's production is shown separately. If fewer days are available since the earliest stored pumping record, the dashboard shows that shorter period. A missing record may mean no pumping or missing data, so older averages can be incomplete. Capacity and well production remain separate: externally added water changes capacity, not well production.
 - **Menu:**
   - *Settings*: initial and maximum fault back-off (hours), maximum continuous run time (minutes, default 10; 0 disables), run-limit back-off (minutes, default 1440), restart check delay (seconds, minimum 35), pump rate (gal/min, default 5), target (gal/day, display only), low and high capacity levels (gal), change password, and firmware update.
   - *Event log*: the last 100 events, newest first, with a *Clear log* button. Each pump start logs *Pump on*, and every stop logs *Pump off* with the run time and gallons pumped, whatever the cause (clean stop, fault or disable).
@@ -210,7 +234,7 @@ Controller details:
 - The run-limit back-off expiry is also persisted across reboot and waits for the wall clock if needed.
 - Float-gate relay output is low (the high-level-trigger relay is de-energized, NC closed, float signal passed) from the first instructions of `app_main`. Before that, during the bootloader, the pin floats and the float loop may be available briefly.
 
-Persistence (NVS, namespace `pump`): settings, controller state (`persist`), the capacity estimate (`capacity`), capacity history (`caphist`, the last 256 samples), event log (`events2`), 90 days of daily gallons (`days`), credentials (`cred`, salted SHA-256), and the TLS certificate and key. Structural changes are saved immediately and run-time counters about once a minute, to limit flash wear.
+Persistence (NVS, namespace `pump`): settings, controller state (`persist`), the combined capacity estimate, capacity history and Flo checkpoint (`level`), event log (`events2`), 90 days of daily gallons (`days`), credentials (`cred`, salted SHA-256), and the TLS certificate and key. On upgrade, the level and Flo state are migrated from the existing `capacity`, `caphist` and `flo` keys without resetting them. The old keys are not kept up to date; downgrading to older firmware can therefore restore an outdated level. Structural changes are saved immediately and run-time counters about once a minute, to limit flash wear.
 
 HTTP API (all `/api` routes require Basic auth):
 
@@ -225,7 +249,6 @@ HTTP API (all `/api` routes require Basic auth):
 | GET     | `/api/system`   | Hardware info: chip, temperature, uptime, reset reason, heap, flash, OTA slot, NVS use, Wi-Fi disconnects |
 | GET     | `/api/history`  | Daily gallons                                           |
 | GET     | `/api/capacity` | Capacity samples (`t`, `gal`), oldest first         |
-| POST    | `/api/capacity/refresh` | Corrects the capacity estimate and history with Flo water use since the last reset or correction (once per hour at most) |
 | POST    | `/api/cert`     | `{"ip": "192.168.1.63"}` creates a certificate for that IP and restarts (409 while the pump runs) |
 | GET     | `/cert.crt`     | Public. Downloads the current certificate for installing on a client |
 | POST    | `/api/password` | `{"username": "...", "password": "..."}` (either one) |
@@ -250,7 +273,7 @@ Wire the relay module (VCC to 5V, GND to GND, IN to GPIO 6, trigger jumper High)
 
 - The drive does not report which fault occurred, so any alarm is treated the same.
 - Gallons are an estimate (run time x gal/min), not a measurement.
-- The refresh icon on the Level chart subtracts the water Flo measured from the level, from the last capacity reset (a call for water starting, or a clean stop) or the last correction, up to the last whole hour that ended at least 30 minutes ago. Each hour is applied once, partial hours at a reset are prorated, and at most one refresh per hour is allowed. Until the first reset after the update there is nothing to correct from, so it waits. Gaps longer than 7 days are caught up 7 days per refresh.
+- Flo corrections run automatically in a background task approximately every 24 hours; the dashboard shows the latest result and last successful correction. Failures are retried after five minutes, and the pump control loop does not wait for Flo. The correction subtracts measured consumption since the last capacity reset (a call for water starting, or a clean stop) or last correction, up to the last whole hour that ended at least 30 minutes ago. Each hour is applied once; partial hours at a reset are prorated, so those portions are estimates. Until a known level is available there is nothing to correct from. Gaps over seven days are fetched in multiple batches. The level estimate can be stale between updates and during failures; a reset establishes a new level and anchor.
 - Daily buckets use UTC. The browser displays dates in local time.
 - Updates are over USB or Wi-Fi (see above). Images are not signed.
 - The Wi-Fi password is stored in the device's flash (NVS) in plain text. It is not in the firmware image or the repository, but anyone with physical access to the board could read it. Flash encryption is not enabled.

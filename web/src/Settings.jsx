@@ -81,20 +81,33 @@ export function Settings({ onSaved }) {
     <>
       <form onSubmit={save} class="card">
         <h2>Settings</h2>
-        {field('initialBackoffH', 'Initial fault delay (hours)')}
-        {field('maxBackoffH', 'Maximum fault delay (hours)')}
-        {field('graceS', 'Restart fault check delay (s, min 35)', 1)}
-        {field('gpm', 'Pump rate (gal/min)')}
-        {field('targetGalPerDay', 'Target (gal/day)')}
-        {field('lowLevelGal', 'Float low level (gal)')}
-        {field('highLevelGal', 'Float high level (gal, max 2000)')}
-        {field('waterAddGal', 'Add water amount (gal)')}
-        {field('maxRunM', 'Maximum run time (minutes, 0 disables)')}
-        {field('runBackoffM', 'Run delay (minutes)')}
+        <fieldset class="settings-group">
+          <legend>Fault</legend>
+          {field('initialBackoffH', 'Default delay (hours)')}
+          {field('maxBackoffH', 'Maximum delay (hours)')}
+          {field('graceS', 'Restart delay (s)', 1)}
+        </fieldset>
+        <fieldset class="settings-group">
+          <legend>Run Time</legend>
+          {field('maxRunM', 'Maximum (minutes) 0 to disable')}
+          {field('runBackoffM', 'Delay (minutes)')}
+        </fieldset>
+        <fieldset class="settings-group">
+          <legend>Well</legend>
+          {field('gpm', 'Pump rate (gal/min)')}
+          {field('targetGalPerDay', 'Production Target (gal/day)')}
+        </fieldset>
+        <fieldset class="settings-group">
+          <legend>Cistern</legend>
+          {field('lowLevelGal', 'Float low level (gal)')}
+          {field('highLevelGal', 'Float high level (gal, max 2000)')}
+          {field('waterAddGal', 'Add water amount (gal)')}
+        </fieldset>
         <div class="row"><button type="submit" class="primary">Save</button><span class="muted">{msg}</span></div>
       </form>
+      <Firmware />
       <form onSubmit={changeAccount} class="card">
-        <h2>Login</h2>
+        <h2>Login Credentials</h2>
         <p class="muted">This login is also used to sign in to your Moen Flo account.</p>
         <label>
           Username
@@ -138,7 +151,6 @@ export function Settings({ onSaved }) {
           </>
         )}
       </div>
-      <Firmware />
     </>
   );
 }
