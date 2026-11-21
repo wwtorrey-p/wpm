@@ -209,10 +209,9 @@ export function Dashboard({ onSignOut }) {
                   <Metric label="Pumped This Run" value={`${st.cycleGallons.toFixed(0)} gal`} />
                   <Metric label="Run Time" value={fmtRuntime(st.cycleRunS)} />
                   <Metric label="Well Production Today (UTC)" value={today != null && hist ? `${(production.byDay.get(today) || 0).toFixed(1)} gal` : 'Unavailable'} />
-                  <Metric label="Well Production, 7 Completed Days" value={avgValue(last7, 7)} />
-                  <Metric label="Well Production, 30 Completed Days" value={<>{avgValue(last30, 30)}{target ? <span class="sub">(target {target} gal/day)</span> : null}</>} />
+                  <Metric label="Well Production, 7 Days" value={avgValue(last7, 7)} />
+                  <Metric label="Well Production, 30 Days" value={avgValue(last30, 30)} />
                 </div>
-                <p class="muted small">Estimated from pump runtime. Averages include days without pumping; older history may be incomplete. Days use UTC.</p>
                 {histErr && <p class="error">Well production history: {histErr}</p>}
               </section>
             )}
@@ -227,10 +226,12 @@ export function Dashboard({ onSignOut }) {
                 max={st ? st.maxCapacityGal : 2000}
                 target={target}
               />
-              {st && <p style={{marginTop:'1rem'}} class={`${floStale || (st.floStatus && (st.floStatus.includes('failed') || st.floStatus.includes('waiting for Wi-Fi'))) ? 'error' : 'muted'} small`}>Flo: {st.floStatus || 'Automatic update status unavailable'}.
-                {' '}Last successful correction: {st.floLastRefresh ? fmtTime(st.floLastRefresh) : 'not yet'}.
-                {floStale && ' Flo correction is overdue.'}
+              <p style={{marginTop:'1rem'}} class={'small'}>Consumption Update</p>
+              {st && <p class={`${floStale || (st.floStatus && (st.floStatus.includes('failed') || st.floStatus.includes('waiting for Wi-Fi'))) ? 'error' : 'muted'} small`}> {st.floStatus || 'Automatic update status unavailable'}.
               </p>}
+              <p class={'muted small'}>Last correction: {st && st.floLastRefresh ? fmtTime(st.floLastRefresh) : 'not yet'}.
+                {floStale && ' Flo correction is overdue.'}
+              </p>
             </section>
           </>
         )}
@@ -238,3 +239,4 @@ export function Dashboard({ onSignOut }) {
     </div>
   );
 }
+

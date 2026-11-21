@@ -151,6 +151,46 @@ After the first USB flash you can update over Wi-Fi from the UI:
 3. Choose `firmware.bin` and press *Upload and restart*, then confirm.
 4. The device checks that the file is an app image for this project, writes it to the idle slot, validates it, switches slot and restarts. The page reloads when the device is back.
 
+### PowerShell command-line client
+
+If the UI is unavailable, open PowerShell 7 (`pwsh`) in the project root and provide the device's IPv4 address and dashboard credentials:
+
+```powershell
+$cred = Get-Credential
+$ip = '192.168.1.63'  # replace with the device's IP
+```
+
+Read status, settings, or another GET API endpoint:
+
+```powershell
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command Get
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command Get -Endpoint '/api/settings'
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command Get -Endpoint '/api/flo/usage?days=7&interval=1d'
+```
+
+To update settings, supply only the values you want to change. This example changes the pump rate and run limit:
+
+```powershell
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command SetSettings -Settings @{ gpm = 5; maxRunM = 10 }
+```
+
+To update firmware, build first and upload only if the build passes:
+
+```powershell
+.\build.ps1 -Task Build
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command Firmware
+```
+
+`Get` defaults to `/api/status`; `-Endpoint` accepts other `/api/` paths and query strings. `SetSettings` uses the API's PUT method; setting names are case-sensitive, values must be numeric, and the device validates their ranges. `Firmware` defaults to `.pio\build\esp32s3\firmware.bin`; use `-File <path>` to select another image. It uploads and restarts the device but does not wait for it to come back; retry a status request after the restart. See the safety notes below before uploading.
+
+HTTPS certificate verification is enabled by default. Install and trust a device certificate valid for its IP (see [Using the app](#using-the-app)), or, only on a trusted network, add `-SkipCertificateCheck` to the desired command. This disables server identity verification:
+
+```powershell
+.\scripts\wpm-cli.ps1 -Ip $ip -Credential $cred -Command Get -SkipCertificateCheck
+```
+
+Run the CLI's focused tests with `pwsh -NoProfile -File .\test\test_wpm_cli.ps1`.
+
 Behaviour and safety:
 
 - The upload needs a signed-in user and runs over HTTPS. It is refused while the pump is running, so a call for water is not interrupted.
