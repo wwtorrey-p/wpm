@@ -9,6 +9,7 @@ import {
 import { Hardware } from './Hardware.jsx';
 import { Network } from './Network.jsx';
 import { DAY, productionAverage, productionHistory } from './production.js';
+import { Report } from './Report.jsx';
 import { Settings } from './Settings.jsx';
 
 const MODES = {
@@ -75,6 +76,7 @@ export function Dashboard({ onSignOut }) {
   const [hist, histErr] = usePolling(() => api('/api/history'), 60000);
   const [capHist, , setCapHist] = usePolling(() => api('/api/capacity'), 60000);
   const [settings, setSettings] = useState(null);
+  const [chartDays, setChartDays] = useState(7);
   const target = settings ? settings.targetGalPerDay : 0;
 
   useEffect(() => { api('/api/settings').then(setSettings).catch(() => {}); }, []);
@@ -127,12 +129,11 @@ export function Dashboard({ onSignOut }) {
   // The drive's alarm also fires (F26) while we hold Aux open, so it only means a fault when armed.
   const pump = !st ? 'off'
     : isRunBackoff ? 'limit'
-      : st.state === 'backoff' || (st.state === 'armed' && st.alarm) ? 'fault' : st.running ? 'on' : 'off';
+      : st.state === 'armed' && st.alarm ? 'fault' : st.running ? 'on' : 'off';
 
   const today = st && st.epoch > 0 ? Math.floor(st.epoch / DAY) : null;
   const production = productionHistory(hist || []);
-  const last7 = today != null && hist ? productionAverage(production, today - 1, 7) : null;
-  const last30 = today != null && hist ? productionAverage(production, today - 1, 30) : null;
+  const chartProduction = today != null && hist ? productionAverage(production, today - 1, chartDays) : null;
   const floStale = st && st.floLastRefresh && st.epoch - st.floLastRefresh > 2 * DAY;
   const avgValue = (result, window) => result
     ? <>{result.average.toFixed(1)} gal/day{result.days < window && <span class="sub">({result.days} days since first record)</span>}</>
@@ -156,6 +157,7 @@ export function Dashboard({ onSignOut }) {
               <button onClick={() => go('network')}>Network</button>
               <button onClick={() => go('hardware')}>Hardware</button>
               <button onClick={() => go('log')}>Event Log</button>
+              <button onClick={() => go('report')}>Device Report</button>
               {st && (st.enabled
                 ? <button onClick={() => control('disable')}>Disable Pump</button>
                 : <button onClick={() => control('enable')}>Enable Pump</button>)}
@@ -179,6 +181,7 @@ export function Dashboard({ onSignOut }) {
         {view === 'network' && <Network />}
         {view === 'hardware' && <Hardware />}
         {view === 'log' && <EventLog />}
+        {view === 'report' && <Report />}
 
         {view === 'home' && (
           <>
@@ -196,21 +199,17 @@ export function Dashboard({ onSignOut }) {
                 <div class="metrics">
                   {(st.state === 'backoff' || isRunBackoff) && (
                     <>
-                      <Metric label={isRunBackoff ? 'Run Limit Delay' : 'Fault Delay'}
-                        value={isRunBackoff ? fmtDuration(settings ? settings.runBackoffM * 60 : 0) : fmtDuration(st.curBackoffS)} />
                       <Metric label="Next Retry" value={waitEnd
                         ? <>{fmtTime(waitEnd)}<span class="sub">({fmtDuration(waitLeft)})</span></>
                         : 'waiting for clock'} />
                     </>
                   )}
-                  <Metric label="Next Fault Delay" value={fmtDuration(st.nextBackoffS)} />
-                  <Metric label="Faults" value={st.faultCount} />
-                  <Metric label="Total Run Time" value={fmtDuration(st.totalRunS)} />
                   <Metric label="Pumped This Run" value={`${st.cycleGallons.toFixed(0)} gal`} />
                   <Metric label="Run Time" value={fmtRuntime(st.cycleRunS)} />
-                  <Metric label="Well Production Today (UTC)" value={today != null && hist ? `${(production.byDay.get(today) || 0).toFixed(1)} gal` : 'Unavailable'} />
-                  <Metric label="Well Production, 7 Days" value={avgValue(last7, 7)} />
-                  <Metric label="Well Production, 30 Days" value={avgValue(last30, 30)} />
+                  {settings && Number.isFinite(st.totalRunS) && Number.isFinite(settings.gpm) &&
+                    <Metric label="Total Pumped" value={`${(st.totalRunS * settings.gpm / 60).toFixed(0)} gal`} />}
+                  <Metric label="Total Run Time" value={fmtDuration(st.totalRunS)} />
+                  <Metric label={`Well Production, ${chartDays} Days`} value={avgValue(chartProduction, chartDays)} />
                 </div>
                 {histErr && <p class="error">Well production history: {histErr}</p>}
               </section>
@@ -225,6 +224,8 @@ export function Dashboard({ onSignOut }) {
                 capacity={st ? st.capacityGal : 0}
                 max={st ? st.maxCapacityGal : 2000}
                 target={target}
+                days={chartDays}
+                onDaysChange={setChartDays}
               />
               <p style={{marginTop:'1rem'}} class={'small'}>Consumption Update</p>
               {st && <p class={`${floStale || (st.floStatus && (st.floStatus.includes('failed') || st.floStatus.includes('waiting for Wi-Fi'))) ? 'error' : 'muted'} small`}> {st.floStatus || 'Automatic update status unavailable'}.

@@ -1,4 +1,3 @@
-import { useState } from 'preact/hooks';
 import { DAY, productionAverage, productionHistory } from './production.js';
 
 const RANGES = [7, 30, 90];
@@ -17,9 +16,7 @@ function niceMax(v) {
 const fmtTick = (v, max) => (max < 20 ? v.toFixed(1) : Math.round(v).toString());
 const fmtDate = (t) => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
-export function CapacityChart({ samples, history, now, capacity, max, target }) {
-  const [days, setDays] = useState(7);
-
+export function CapacityChart({ samples, history, now, capacity, max, target, days, onDaysChange }) {
   const end = now || Math.floor(Date.now() / 1000);
   const start = end - days * DAY;
   const x = (t) => L + ((Math.min(Math.max(t, start), end) - start) / (end - start)) * PW;
@@ -53,7 +50,7 @@ export function CapacityChart({ samples, history, now, capacity, max, target }) 
     <div>
       <div class="chart-range" role="group" aria-label="Time range">
         {RANGES.map((r) => (
-          <button key={r} type="button" class={r === days ? 'on' : ''} onClick={() => setDays(r)}>{r} d</button>
+          <button key={r} type="button" class={r === days ? 'on' : ''} onClick={() => onDaysChange(r)}>{r} d</button>
         ))}
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} class="chart" role="img" aria-label="Capacity and average pump rate over time">

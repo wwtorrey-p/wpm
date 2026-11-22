@@ -29,6 +29,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "flo.h"
+#include "report_format.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -119,11 +120,11 @@ static const char* eventName(pump::EventType t) {
     return "unknown";
 }
 
-static esp_err_t getStatus(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
-    g_app->lock();
+// The caller holds the application lock.
+static cJSON* statusJson() {
     pump::Status st = g_app->controller().status();
     cJSON* j = cJSON_CreateObject();
+    if (!j) return nullptr;
     cJSON_AddStringToObject(j, "state", stateName(st.state));
     cJSON_AddBoolToObject(j, "enabled", st.p.enabled);
     cJSON_AddBoolToObject(j, "auxClosed", st.auxClosed);
@@ -146,11 +147,19 @@ static esp_err_t getStatus(httpd_req_t* req) {
     cJSON_AddStringToObject(j, "floStatus", g_app->floStatus().c_str());
     cJSON_AddStringToObject(j, "certIp", certIp().c_str());
     cJSON_AddStringToObject(j, "username", g_app->username().c_str());
-    g_app->unlock();
     const esp_app_desc_t* desc = esp_app_get_description();
     cJSON_AddStringToObject(j, "version", desc->version);
     std::string built = std::string(desc->date) + " " + desc->time;
     cJSON_AddStringToObject(j, "built", built.c_str());
+    return j;
+}
+
+static esp_err_t getStatus(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    g_app->lock();
+    cJSON* j = statusJson();
+    g_app->unlock();
+    if (!j) return httpd_resp_send_500(req);
     return sendJson(req, j);
 }
 
@@ -160,9 +169,9 @@ static std::string ipStr(const esp_ip4_addr_t& a) {
     return buf;
 }
 
-static esp_err_t getNetwork(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
+static cJSON* networkJson() {
     cJSON* j = cJSON_CreateObject();
+    if (!j) return nullptr;
     esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t ip = {};
     bool up = netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0;
@@ -189,12 +198,19 @@ static esp_err_t getNetwork(httpd_req_t* req) {
         cJSON_AddNumberToObject(j, "rssi", ap.rssi);
         cJSON_AddNumberToObject(j, "channel", ap.primary);
     }
+    return j;
+}
+
+static esp_err_t getNetwork(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    cJSON* j = networkJson();
+    if (!j) return httpd_resp_send_500(req);
     return sendJson(req, j);
 }
 
-static esp_err_t getSystem(httpd_req_t* req) {
-    if (!authorized(req)) return ESP_OK;
+static cJSON* systemJson() {
     cJSON* j = cJSON_CreateObject();
+    if (!j) return nullptr;
 
     cJSON_AddNumberToObject(j, "uptimeS", (double)(esp_timer_get_time() / 1000000));
     const char* reset = "unknown";
@@ -261,6 +277,13 @@ static esp_err_t getSystem(httpd_req_t* req) {
 
     cJSON_AddNumberToObject(j, "wifiDisconnects", wifi::disconnectCount());
     cJSON_AddNumberToObject(j, "wifiLastReason", wifi::lastDisconnectReason());
+    return j;
+}
+
+static esp_err_t getSystem(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+    cJSON* j = systemJson();
+    if (!j) return httpd_resp_send_500(req);
     return sendJson(req, j);
 }
 
@@ -422,6 +445,148 @@ static esp_err_t getHistory(httpd_req_t* req) {
     }
     g_app->unlock();
     return sendJson(req, arr);
+}
+
+struct ReportSnapshot {
+    EventLog log;
+    CapHistory capacity;
+    std::array<DayBucket, kHistoryDays> history;
+};
+
+static std::string htmlEscape(const std::string& value) {
+    std::string out;
+    for (char c : value) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&#39;"; break;
+            default: out += c;
+        }
+    }
+    return out;
+}
+
+static std::string reportValue(const cJSON* item) {
+    if (cJSON_IsString(item)) return report::text(item->string, item->valuestring);
+    if (cJSON_IsBool(item)) return report::boolean(item->string, cJSON_IsTrue(item));
+    if (cJSON_IsNumber(item)) return report::number(item->string, item->valuedouble);
+    return "Unavailable";
+}
+
+static esp_err_t reportChunk(httpd_req_t* req, const std::string& text) {
+    return httpd_resp_send_chunk(req, text.c_str(), text.size());
+}
+
+static esp_err_t reportFields(httpd_req_t* req, const char* title, const cJSON* fields) {
+    esp_err_t err = reportChunk(req, "<section><h2>" + htmlEscape(title) + "</h2><table><tbody>");
+    if (err != ESP_OK) return err;
+    const cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, fields) {
+        std::string row = "<tr><th scope=\"row\">" + htmlEscape(report::label(item->string)) +
+                          "</th><td>" + htmlEscape(reportValue(item)) + "</td></tr>";
+        if ((err = reportChunk(req, row)) != ESP_OK) return err;
+    }
+    return reportChunk(req, "</tbody></table></section>");
+}
+
+static esp_err_t getReport(httpd_req_t* req) {
+    if (!authorized(req)) return ESP_OK;
+
+    std::unique_ptr<ReportSnapshot> snapshot(new (std::nothrow) ReportSnapshot);
+    if (!snapshot) return httpd_resp_send_500(req);
+    g_app->lock();
+    Json status(statusJson());
+    Json settings(settingsJson(g_app->controller().settings()));
+    snapshot->log = g_app->events();
+    snapshot->capacity = g_app->capacityHistory();
+    snapshot->history = g_app->history();
+    g_app->unlock();
+    Json network(networkJson());
+    Json system(systemJson());
+    if (!status || !settings || !network || !system) return httpd_resp_send_500(req);
+
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+    httpd_resp_set_hdr(req, "Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
+    char query[32];
+    char download[4];
+    if (httpd_req_get_url_query_str(req, query, sizeof query) == ESP_OK &&
+        httpd_query_key_value(query, "download", download, sizeof download) == ESP_OK &&
+        strcmp(download, "1") == 0) {
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"water-pump-report.html\"");
+    }
+
+    esp_err_t err = reportChunk(req,
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+        "<title>Water Pump Monitor Report</title><style>"
+        ":root{color-scheme:dark;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif}"
+        "*{box-sizing:border-box}body{margin:0;color:#e8edf7;background:linear-gradient(180deg,#111c33,#0b1220 40%) fixed}"
+        "header{background:#0a0f1c;border-bottom:1px solid #26365a;padding:1.1rem 1.5rem}"
+        "header div,main{max-width:960px;margin:auto}header p{margin:.25rem 0 0;color:#8b9bbd;font-size:.85rem}"
+        "main{padding:1.25rem}h1{font-size:1.25rem;margin:0}h2{font-size:1.05rem;margin:0 0 .75rem}"
+        "section{background:#131d33;border:1px solid #26365a;border-radius:12px;padding:1.25rem;margin-bottom:1rem}"
+        "p{color:#8b9bbd;font-size:.9rem;line-height:1.5;margin:.4rem 0 1rem}"
+        "table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{text-align:left;padding:.65rem .5rem;"
+        "border-bottom:1px solid #26365a;overflow-wrap:anywhere;vertical-align:top}"
+        "th{color:#8b9bbd;font-weight:500}tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}"
+        "tbody th{width:48%}thead th{background:#1a2744;color:#e8edf7;font-weight:600}"
+        "@media(max-width:480px){main{padding:.75rem}section{padding:1rem}th,td{padding:.55rem .3rem}}"
+        "@media print{:root{color-scheme:light}body{background:white;color:#172033}header{background:white;"
+        "color:#172033}header p,p,th{color:#475569}section{background:white;border-color:#cbd5e1}"
+        "thead th{background:#edf3f8;color:#172033}th,td{border-color:#cbd5e1}}"
+        "</style></head><body><header><div><h1>Water Pump Monitor</h1>"
+        "<p>Device report &middot; Snapshot generated by the device</p></div></header><main>"
+        "<section><h2>About this report</h2>"
+        "<p>Times are UTC; unavailable times mean the device clock or value is unknown. "
+        "Network, hardware and controller readings are collected in sequence.</p>"
+        "<p>The drive alarm may be asserted while the float gate is open; an alarm during back-off does not necessarily mean a continuing fault. "
+        "Pump volumes are estimates based on the configured pump rate.</p></section>");
+    if (err != ESP_OK) return err;
+    if ((err = reportFields(req, "Current conditions", status.get())) != ESP_OK ||
+        (err = reportFields(req, "Settings", settings.get())) != ESP_OK ||
+        (err = reportFields(req, "Network", network.get())) != ESP_OK ||
+        (err = reportFields(req, "Hardware and firmware", system.get())) != ESP_OK) return err;
+
+    if ((err = reportChunk(req, "<section><h2>Event log</h2><p>Newest first; up to 100 retained events.</p>"
+        "<table><thead><tr><th>Time (UTC)</th><th>Event</th></tr></thead><tbody>")) != ESP_OK) return err;
+    if (!snapshot->log.count && (err = reportChunk(req, "<tr><td colspan=\"2\">No events recorded.</td></tr>")) != ESP_OK) return err;
+    for (uint32_t i = 0; i < snapshot->log.count; ++i) {
+        const pump::Event& e = snapshot->log.events[(snapshot->log.head + kMaxEvents - 1 - i) % kMaxEvents];
+        if ((err = reportChunk(req, "<tr><td>" + report::time(e.epoch) + "</td><td>" +
+                               htmlEscape(report::event(e)) + "</td></tr>")) != ESP_OK) return err;
+    }
+    if ((err = reportChunk(req, "</tbody></table></section><section><h2>Daily well production</h2>"
+        "<p>Recorded UTC days, up to 90 days. Missing days have no recorded production, but older data may be incomplete.</p>"
+        "<table><thead><tr><th>UTC day</th><th>Gallons</th></tr></thead><tbody>")) != ESP_OK) return err;
+    std::sort(snapshot->history.begin(), snapshot->history.end(),
+              [](const DayBucket& a, const DayBucket& b) { return a.day > b.day; });
+    bool hasHistory = false;
+    for (const DayBucket& b : snapshot->history) {
+        if (!b.day) continue;
+        hasHistory = true;
+        char gallons[40];
+        snprintf(gallons, sizeof gallons, "%.1f", b.gallons);
+        if ((err = reportChunk(req, "<tr><td>" + report::time(static_cast<int64_t>(b.day) * 86400) +
+                               "</td><td>" + gallons + "</td></tr>")) != ESP_OK) return err;
+    }
+    if (!hasHistory && (err = reportChunk(req, "<tr><td colspan=\"2\">No production history recorded.</td></tr>")) != ESP_OK) return err;
+    if ((err = reportChunk(req, "</tbody></table></section><section><h2>Capacity history</h2>"
+        "<p>Oldest first; up to 256 retained samples. Values are estimated gallons.</p>"
+        "<table><thead><tr><th>Time (UTC)</th><th>Gallons</th></tr></thead><tbody>")) != ESP_OK) return err;
+    const CapHistory& h = snapshot->capacity;
+    if (!h.count && (err = reportChunk(req, "<tr><td colspan=\"2\">No capacity history recorded.</td></tr>")) != ESP_OK) return err;
+    for (uint32_t i = 0; i < h.count; ++i) {
+        const CapSample& s = h.samples[(h.head + kCapSamples - h.count + i) % kCapSamples];
+        char gallons[40];
+        snprintf(gallons, sizeof gallons, "%.1f", s.gallons);
+        if ((err = reportChunk(req, "<tr><td>" + report::time(s.epoch) + "</td><td>" + gallons + "</td></tr>")) != ESP_OK) return err;
+    }
+    if ((err = reportChunk(req, "</tbody></table></section></main></body></html>")) != ESP_OK) return err;
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 static esp_err_t sendText(httpd_req_t* req, const char* status, const char* msg);
@@ -688,6 +853,7 @@ bool startWebServer(App& app) {
         {"/api/log", HTTP_DELETE, deleteLog, nullptr},
         {"/api/history", HTTP_GET, getHistory, nullptr},
         {"/api/capacity", HTTP_GET, getCapacityHistory, nullptr},
+        {"/api/report", HTTP_GET, getReport, nullptr},
         {"/api/capacity/add", HTTP_POST, postCapacityAdd, nullptr},
         {"/api/password", HTTP_POST, postPassword, nullptr},
         {"/api/flo/usage", HTTP_GET, getFloUsage, nullptr},

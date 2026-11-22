@@ -225,6 +225,7 @@ Dashboard (dark theme, phone friendly):
 - **Menu:**
   - *Settings*: initial and maximum fault back-off (hours), maximum continuous run time (minutes, default 10; 0 disables), run-limit back-off (minutes, default 1440), restart check delay (seconds, minimum 35), pump rate (gal/min, default 5), target (gal/day, display only), low and high capacity levels (gal), change password, and firmware update.
   - *Event log*: the last 100 events, newest first, with a *Clear log* button. Each pump start logs *Pump on*, and every stop logs *Pump off* with the run time and gallons pumped, whatever the cause (clean stop, fault or disable).
+  - *Device Report*: generate a self-contained HTML snapshot on the device and either view it in a new tab or download it without opening it. The report includes current conditions, settings, network and hardware information, the retained event log, daily well production, and capacity history. It contains network details but no passwords; keep downloaded copies private. All report times are UTC. The report reflects the device's retained data (up to 100 events, 90 daily buckets, and 256 capacity samples), not an unlimited archive.
   - *Disable pump* / *Enable pump*: opens or closes the float gate. A back-off in progress is kept while disabled.
   - *Reset back-off*: returns to the initial duration and resumes immediately.
   - *End back-off now* (only during a back-off): resumes immediately but keeps the escalated duration.
